@@ -50,6 +50,9 @@ class SolidityStaticAnalyzer:
                 self._check_dangerous_delegatecall(f_lines, c_name, f_name, f_start, findings)
                 self._check_uninitialized_storage_pointers(f_lines, c_name, f_name, f_start, findings)
                 self._check_missing_zero_address_validation(f_lines, c_name, f_name, f_start, findings)
+                self._check_missing_access_control(f_lines, c_name, f_name, f_start, findings, lines)
+                self._check_unchecked_arithmetic(f_lines, c_name, f_name, f_start, findings)
+                self._check_unbounded_loop(f_lines, c_name, f_name, f_start, findings)
 
         return findings
 
@@ -80,9 +83,17 @@ class SolidityStaticAnalyzer:
         i = start_line - 1
         while i < end_line and i < len(lines):
             line = lines[i]
-            match = re.search(r'\b(?:function\s+([a-zA-Z0-9_]+)|fallback\s*\(|receive\s*\()', line)
+            match = re.search(r'\b(?:function\s+([a-zA-Z0-9_]*)|function\s*\(|constructor\s*\(|fallback\s*\(|receive\s*\()', line)
             if match:
-                f_name = match.group(1) if match.group(1) else ('receive' if 'receive' in line else 'fallback')
+                f_name = match.group(1)
+                if not f_name:
+                    if 'constructor' in line:
+                        f_name = 'constructor'
+                    elif 'receive' in line:
+                        f_name = 'receive'
+                    else:
+                        f_name = 'fallback'
+                
                 f_start = i + 1
                 f_end = self._find_closing_brace(lines, i)
                 functions.append({
@@ -143,7 +154,7 @@ class SolidityStaticAnalyzer:
     def _check_unchecked_calls(self, f_lines: List[str], c_name: str, f_name: str, offset: int, findings: List[StaticFinding]):
         for idx, line in enumerate(f_lines):
             clean = re.sub(r'//.*$', '', line).strip()
-            if re.search(r'\b[a-zA-Z0-9_]+\s*\.\s*(call|delegatecall|send)\s*\(', clean):
+            if re.search(r'\b[a-zA-Z0-9_]+\s*\.\s*(call|send)(?:\s*\{[^}]*\})?\s*\(', clean):
                 if not (clean.startswith('require') or clean.startswith('if') or clean.startswith('(') or clean.startswith('bool ')):
                     findings.append(StaticFinding(
                         id=f'finding-{uuid.uuid4().hex[:8]}',
@@ -274,3 +285,104 @@ class SolidityStaticAnalyzer:
                     message=f'Missing Zero Address Validation: Parameter "{param}" assigned to state variable without validation against address(0).',
                     snippet=f_lines[assign_idx].strip()
                 ))
+
+    def _check_missing_access_control(self, f_lines: List[str], c_name: str, f_name: str, offset: int, findings: List[StaticFinding], full_lines: List[str]):
+        if f_name in ['constructor', 'receive', 'fallback']:
+            return
+        
+        header = f_lines[0] if f_lines else ""
+        if 'public' not in header and 'external' not in header:
+            return
+
+        has_auth = False
+        if any(mod in header for mod in ['onlyOwner', 'onlyAdmin', 'auth']):
+            has_auth = True
+        
+        for line in f_lines:
+            clean = re.sub(r'//.*$', '', line).strip()
+            if 'require(msg.sender' in clean or 'msg.sender ==' in clean:
+                has_auth = True
+
+        if has_auth:
+            return
+
+        is_payable = 'payable' in header
+        if is_payable or f_name.lower() in ['deposit', 'transfer', 'safewithdraw']:
+            deposit_like = True
+            for line in f_lines[1:]:
+                clean = re.sub(r'//.*$', '', line).strip()
+                if not clean or clean == '}': continue
+                if clean.startswith('require'): continue
+                if 'balances[msg.sender]' in clean or '.push' in clean or 'balances[to]' in clean: continue
+                # if it just does simple deposit stuff, it's a deposit
+                if 'msg.value' in clean or 'msg.sender.call' in clean: continue
+                deposit_like = False
+                break
+            if deposit_like:
+                return
+
+        modifies_state = False
+        for line in f_lines:
+            clean = re.sub(r'//.*$', '', line).strip()
+            # check if it modifies state variables (assigns to storage)
+            # basic check if it doesn't start with type name and has = 
+            match = re.search(r'^(?!require|uint|int|address|bool|string|bytes)([a-zA-Z0-9_\[\]\.]+)\s*(=|\+=|-=|\*=|/=)', clean)
+            if match:
+                lhs = match.group(1)
+                # Ignore msg.value additions or updates mapped directly to msg.sender
+                if 'msg.value' not in clean and 'msg.sender' not in lhs:
+                    modifies_state = True
+                    break
+
+        if modifies_state:
+            findings.append(StaticFinding(
+                id=f'finding-{uuid.uuid4().hex[:8]}',
+                contract=c_name,
+                function=f_name,
+                line_start=offset,
+                line_end=offset,
+                category='missing-access-control',
+                confidence=0.95,
+                message=f'The function {f_name} at line {offset} modifies state but lacks access control modifiers.',
+                snippet=header
+            ))
+
+    def _check_unchecked_arithmetic(self, f_lines: List[str], c_name: str, f_name: str, offset: int, findings: List[StaticFinding]):
+        in_unchecked = False
+        for idx, line in enumerate(f_lines):
+            clean = re.sub(r'//.*$', '', line).strip()
+            if 'unchecked {' in clean:
+                in_unchecked = True
+            elif in_unchecked and '}' in clean:
+                in_unchecked = False
+                
+            if in_unchecked and 'unchecked {' not in clean:
+                if re.search(r'(\+|-|\*|/|\+=|-=|\*=|/=)', clean):
+                    findings.append(StaticFinding(
+                        id=f'finding-{uuid.uuid4().hex[:8]}',
+                        contract=c_name,
+                        function=f_name,
+                        line_start=offset + idx,
+                        line_end=offset + idx,
+                        category='unchecked-arithmetic',
+                        confidence=0.90,
+                        message=f'Unchecked arithmetic inside unchecked block in {f_name} at line {offset + idx}.',
+                        snippet=clean
+                    ))
+
+    def _check_unbounded_loop(self, f_lines: List[str], c_name: str, f_name: str, offset: int, findings: List[StaticFinding]):
+        for idx, line in enumerate(f_lines):
+            clean = re.sub(r'//.*$', '', line).strip()
+            if clean.startswith('for') or clean.startswith('while'):
+                if '.length' in clean:
+                    findings.append(StaticFinding(
+                        id=f'finding-{uuid.uuid4().hex[:8]}',
+                        contract=c_name,
+                        function=f_name,
+                        line_start=offset + idx,
+                        line_end=offset + idx,
+                        category='unbounded-loop',
+                        confidence=0.80,
+                        message=f'Unbounded loop using .length in {f_name} at line {offset + idx}.',
+                        snippet=clean
+                    ))

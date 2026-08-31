@@ -14,7 +14,7 @@ const SEVERITIES = ['Critical', 'High', 'Medium', 'Low', 'Informational'];
 function FindingCard({ f, idx }: { f: VerifiedVulnerability; idx: number }) {
   const [open, setOpen] = useState(idx === 0);
   const [activeTab, setActiveTab] = useState<'explanation' | 'code' | 'diff'>('explanation');
-  const hasDiff = !!f.fixed_code && f.fixed_code !== f.original_code && f.fixed_code.trim().length > 0;
+  const hasDiff = !!f.fixed_code && f.fixed_code !== f.codeSnippet && f.fixed_code.trim().length > 0;
 
   return (
     <div className={`rounded-xl overflow-hidden border transition-colors ${f.severity === 'Critical' || f.severity === 'High'
@@ -26,12 +26,19 @@ function FindingCard({ f, idx }: { f: VerifiedVulnerability; idx: number }) {
         <div className="flex items-center gap-3 text-left">
           <span className="text-gray-500 text-xs font-mono w-5">#{idx + 1}</span>
           <div>
-            <p className="text-white font-semibold text-sm">{f.vulnerability}</p>
+            <p className="text-white font-semibold text-sm">
+              {f.title || f.type}
+              {f.swcId && <span className="ml-2 text-xs text-blue-400 bg-blue-900/30 px-1.5 py-0.5 rounded">{f.swcId}</span>}
+              {f.cweId && <span className="ml-1 text-xs text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded">{f.cweId}</span>}
+            </p>
             <p className="text-gray-400 text-xs mt-0.5">
-              Lines&nbsp;
-              <span className="text-amber-400 font-mono">{f.affected_lines.join(', ')}</span>
+              {f.function && (
+                <>Function:&nbsp;<span className="text-blue-400 font-mono">{f.function}</span>&nbsp;|&nbsp;</>
+              )}
+              Line&nbsp;
+              <span className="text-amber-400 font-mono">{f.line}</span>
               &nbsp;·&nbsp;Confidence&nbsp;
-              <span className="text-gray-300">{(f.confidence * 100).toFixed(0)}%</span>
+              <span className="text-gray-300 font-semibold">{(f.confidence * 100).toFixed(0)}%</span>
             </p>
           </div>
         </div>
@@ -57,32 +64,30 @@ function FindingCard({ f, idx }: { f: VerifiedVulnerability; idx: number }) {
           <div className="p-5 space-y-4">
             {activeTab === 'explanation' && (
               <>
-                {f.evidence && f.evidence.length > 0 && (
+                {f.function && (
                   <div className="bg-blue-950/20 border border-blue-500/15 rounded-lg p-4 mb-4">
                     <p className="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-2">📜 Grounded Evidence</p>
                     <ul className="text-sm text-gray-300 list-disc list-inside">
-                      {f.evidence.map((ev, i) => (
-                        <li key={i}>
-                          Function: <code className="text-blue-300 bg-blue-950/50 px-1 rounded">{ev.function}</code> 
-                          (Lines: {ev.lines.join(', ')})
-                        </li>
-                      ))}
+                      <li>
+                        Function: <code className="text-blue-300 bg-blue-950/50 px-1 rounded">{f.function}</code> 
+                        (Line: {f.line})
+                      </li>
                     </ul>
                   </div>
                 )}
                 <div>
                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">🔎 Static Evidence</p>
                   <div className="bg-amber-950/30 border border-amber-500/20 rounded-lg px-4 py-3 text-amber-300 text-xs font-mono leading-relaxed">
-                    {f.static_evidence}
+                    {f.staticEvidence}
                   </div>
                 </div>
                 <div>
                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">💡 Explanation</p>
-                  <p className="text-sm text-gray-300 leading-relaxed">{f.explanation}</p>
+                  <p className="text-sm text-gray-300 leading-relaxed">{f.description}</p>
                 </div>
                 <div className="bg-red-950/20 border border-red-500/15 rounded-lg p-4">
                   <p className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2">⚡ Attack Scenario</p>
-                  <p className="text-sm text-gray-300 leading-relaxed">{f.attack_scenario}</p>
+                  <p className="text-sm text-gray-300 leading-relaxed">{f.attackScenario}</p>
                 </div>
                 <div className="bg-green-950/20 border border-green-500/15 rounded-lg p-4">
                   <p className="text-xs font-semibold text-green-400 uppercase tracking-wider mb-2">✅ Recommendation</p>
@@ -97,9 +102,9 @@ function FindingCard({ f, idx }: { f: VerifiedVulnerability; idx: number }) {
                 </p>
                 <Suspense fallback={<div className='text-gray-500 text-xs p-4'>Loading highlighter...</div>}>
                 <CodeViewer
-                  code={f.original_code}
+                  code={f.codeSnippet || ''}
                   language="solidity"
-                  highlightLines={f.affected_lines}
+                  highlightLines={[f.line]}
                 />
                 </Suspense>
               </div>
@@ -109,7 +114,7 @@ function FindingCard({ f, idx }: { f: VerifiedVulnerability; idx: number }) {
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                   Inline diff — vulnerable pattern vs. secure remediation
                 </p>
-                <DiffViewer original={f.original_code} fixed={f.fixed_code} label={`${f.vulnerability} — Fix`} />
+                <DiffViewer original={f.codeSnippet || ''} fixed={f.fixed_code || ''} label={`${f.type} — Fix`} />
               </div>
             )}
           </div>

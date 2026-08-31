@@ -26,21 +26,28 @@ class CodeContext(BaseModel):
 class VerifiedVulnerability(BaseModel):
     finding_id: str = Field(..., description="Unique identifier for the finding")
     is_vulnerable: bool = Field(..., description="True if a genuine vulnerability, false if a false positive")
-    vulnerability: str = Field(..., description="Vulnerability type/name")
+    
+    # Unified Schema fields
+    type: str = Field(..., description="Vulnerability type/name")
+    swcId: str = Field("", description="SWC ID (e.g. SWC-107)")
+    cweId: str = Field("", description="CWE ID (e.g. CWE-841)")
     severity: str = Field(..., description="Severity: Critical, High, Medium, Low, Informational")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="LLM Confidence score (float MUST be between 0.0 and 1.0, e.g. 0.95)")
-    static_confidence: Optional[float] = Field(None, description="Static analyzer original confidence")
-    affected_lines: List[int] = Field(..., description="List of line numbers affected")
-    evidence: List[Dict[str, Any]] = Field(..., description="Array of evidence objects with 'function' and 'lines'")
-    explanation: str = Field(..., description="Detailed explanation of the vulnerability")
-    attack_scenario: str = Field(..., description="Step by step attack scenario, grounded only in the source")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    function: str = Field(..., description="Function name where vulnerability occurs")
+    line: int = Field(..., description="Line number of the vulnerability")
+    title: str = Field("", description="Human-readable vulnerability title")
+    description: str = Field(..., description="Detailed explanation of the vulnerability")
+    staticEvidence: str = Field("", description="Evidence from the static analyzer")
+    attackScenario: str = Field(..., description="Step by step attack scenario")
     recommendation: str = Field(..., description="Concrete mitigation steps")
-    original_code: str = Field(..., description="Original vulnerable code snippet")
-    fixed_code: str = Field(..., description="Corrected code snippet")
-    fallback_used: bool = Field(False, description="True if LLM verification failed and fallback was used")
-    fallback_reason: Optional[str] = Field(None, description="Reason for fallback if used")
-    model_used: Optional[str] = Field(None, description="Model used for inference")
-    raw_response: Optional[str] = Field(None, description="Raw LLM response string")
+    codeSnippet: str = Field("", description="Vulnerable code snippet")
+    
+    # Internal tracking / fallback fields
+    fixed_code: str = Field("", description="Corrected code snippet")
+    fallback_used: bool = Field(False)
+    fallback_reason: Optional[str] = Field(None)
+    model_used: Optional[str] = Field(None)
+    raw_response: Optional[str] = Field(None)
 
 class VulnerabilityReportPayload(BaseModel):
     analysis_id: str

@@ -6,12 +6,9 @@ services:
     image: ollama/ollama:latest
     container_name: scanner_ollama
     ports:
-      - "11434:11434"
+      - "11435:11434"
     volumes:
-      - ollama_data:/root/.ollama
-    # Automatically start server and pull the required Qwen model
-    entrypoint: >
-      /bin/sh -c "ollama serve & sleep 5 && ollama pull qwen2.5-coder:latest && wait"
+      - ~/.ollama:/root/.ollama
 
   # 2. FastAPI Backend
   backend:
@@ -22,9 +19,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OLLAMA_URL=http://ollama:11434
-    depends_on:
-      - ollama
+      - OLLAMA_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # 3. React Frontend (Vite + Nginx)
   frontend:
@@ -36,6 +33,3 @@ services:
       - "5173:80"
     depends_on:
       - backend
-
-volumes:
-  ollama_data:

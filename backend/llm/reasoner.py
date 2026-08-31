@@ -1,5 +1,7 @@
 import json
+import os
 import logging
+import re
 from typing import Optional, List, Dict, Any
 from pydantic import ValidationError
 
@@ -9,81 +11,71 @@ from backend.core.finding import StaticFinding, CodeContext, VerifiedVulnerabili
 logger = logging.getLogger(__name__)
 
 class LLMReasoner:
-    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "qwen2.5-coder:latest", prompt_mode: str = "P1"):
-        self.ollama_url = ollama_url
+    def __init__(self, ollama_url: Optional[str] = None, model: str = "qwen2.5-coder:1.5b", prompt_mode: str = "P1"):
+        self.ollama_url = ollama_url or os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.model = model
         self.prompt_mode = prompt_mode
         self.client = httpx.AsyncClient(base_url=self.ollama_url, timeout=120.0)
 
+    def _compress_code(self, code: str) -> str:
+        # Aggressively compress Solidity code by removing comments and extra whitespace
+        code = re.sub(r'//.*', '', code)
+        code = re.sub(r'/\*[\s\S]*?\*/', '', code)
+        code = re.sub(r'\n\s*\n', '\n', code)
+        return code.strip()
+
     async def verify_finding(self, finding: StaticFinding, context: CodeContext, kb_context: Optional[str] = None) -> VerifiedVulnerability:
         schema = VerifiedVulnerability.model_json_schema()
-        schema.pop("title", None)
-        schema.pop("description", None)
-        schema["properties"].pop("fallback_used", None)
-        schema["properties"].pop("fallback_reason", None)
-        schema["properties"].pop("static_confidence", None)
-        if "fallback_used" in schema.get("required", []):
-            schema["required"].remove("fallback_used")
-        if "fallback_reason" in schema.get("required", []):
-            schema["required"].remove("fallback_reason")
-        if "static_confidence" in schema.get("required", []):
-            schema["required"].remove("static_confidence")
+        
+        # We only want the LLM to output these exact fields
+        fields_to_keep = ["type", "swcId", "cweId", "severity", "confidence", "function", "line", "title", "description", "staticEvidence", "attackScenario", "recommendation", "is_vulnerable"]
+        
+        # Remove unwanted properties from schema
+        properties = schema.get("properties", {})
+        schema["properties"] = {k: v for k, v in properties.items() if k in fields_to_keep}
+        schema["required"] = [k for k in schema.get("required", []) if k in fields_to_keep]
 
-        # P0: Minimal Baseline Prompt
-        prompt_p0 = f"""You are a smart contract auditor.
-Review the following vulnerability reported by a static analyzer.
-Vulnerability: {finding.category}
-Message: {finding.message}
+        compressed_code = self._compress_code(context.function_source)
 
-Code Context:
-{context.function_source}
+        prompt_p1 = f"""You are a Solidity auditor. Extract and format the finding. Output strictly valid JSON matching the schema.
 
-RAG Context (if any):
-{kb_context or 'None'}
+STRICT REQUIREMENTS FOR EVERY FINDING:
+1. Standards: Identify the Vulnerability name and standard (SWC/CWE) when applicable.
+2. Location: State the exact contract, function, and line(s) affected.
+3. Grounded Evidence: Quote or identify the specific code pattern causing the issue.
+4. Vulnerability Context: Explain why the pattern is vulnerable in this specific contract.
+5. Concrete Attack Scenario: Tailored to the actual code. Must include: attacker prerequisites, transaction/function sequence, what the attacker controls, and expected security/accounting impact.
+6. Exploitability Assessment: Include exploitability assessment and confidence.
+7. Concrete Remediation: Provide specific fix with corrected code/pattern (e.g. Checks-Effects-Interactions, ReentrancyGuard, replacing tx.origin, checking return values).
+8. Exploitability Scope: Explain whether the issue is exploitable in the current contract or only a potential weakness.
+9. Avoid Duplicates: Group related issues or clearly explain why they are separate.
+10. Grounding Rule: The final report must be grounded entirely in the supplied source code. Never invent missing code, attacker capabilities, execution results, or exploit success.
 
-Is this a real vulnerability? Return JSON matching the schema."""
+Example TRUE POSITIVE:
+Finding: reentrancy at line 24 in withdraw
+Code: (bool s,) = msg.sender.call{{value: amt}}(""); balances[msg.sender] -= amt;
+Result: {{"is_vulnerable":true,"type":"reentrancy","swcId":"SWC-107","cweId":"CWE-841","severity":"High","confidence":0.95,"function":"withdraw","line":24,"title":"State Modification After External Call (Reentrancy)","description":"The withdraw function sends ETH to msg.sender using low-level call before updating the user balance mapping. This allows reentrancy because the state is not updated prior to handing over control flow.","staticEvidence":"msg.sender.call{{value: amt}}(\"\") at line 24 precedes balances[msg.sender] -= amt at line 26","attackScenario":"Prerequisites: Attacker deploys a malicious contract. Sequence: Attacker calls withdraw(). The raw call triggers the attacker's fallback function, which calls withdraw() again before balances[msg.sender] is decremented. Impact: Repeated withdrawals occur while the balance reflects the original value, allowing the attacker to drain the bank's entire ETH balance. Exploitability: High, directly exploitable.","recommendation":"Follow the Checks-Effects-Interactions pattern: update balances[msg.sender] -= amount before executing the external call, or use a ReentrancyGuard modifier."}}
 
-        # P1: Current Source-Grounding Prompt
-        prompt_p1 = f"""You are an expert Smart Contract Security Auditor.
-You must verify if the following potential vulnerability reported by a static analyzer is a TRUE POSITIVE or FALSE POSITIVE.
+Now analyze:
+Finding: {finding.category} at line {finding.line_start} in {finding.function}
+Code:
+{compressed_code}
 
-Hypothesis (From Static Analyzer):
-- Category: {finding.category}
-- Message: {finding.message}
-- Line: {finding.line_start}
-
-Source Code Context:
-```solidity
-{context.function_source}
-```
-
-RAG Knowledge Base Context (if available):
-{kb_context or 'No external context available.'}
-
-VERIFICATION DIRECTIVES:
-1. DO NOT TRUST THE STATIC ANALYZER. It often flags keywords without understanding semantics.
-2. If `tx.origin` is used, WHERE is it used?
-   - `tx.origin == admin` or `require(tx.origin == ...)` is SWC-115 (True Positive).
-   - `tx.origin` used only for logging, event emission, informational purposes, or data recording is NOT SWC-115 by itself.
-
-Think carefully about the code. If it is a False Positive, set `is_vulnerable` to false.
-Return valid JSON matching the schema exactly. Do not output anything else.
+Return ONLY valid JSON matching the schema.
 """
         
-        system_prompt = prompt_p1 if self.prompt_mode == "P1" else prompt_p0
-
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "You are a smart contract auditor that outputs strictly valid JSON matching the requested schema."},
-                {"role": "user", "content": system_prompt}
+                {"role": "system", "content": "You are a smart contract auditor that outputs strictly valid JSON matching the requested schema. Provide grounded, tailored security analysis, avoiding generic statements."},
+                {"role": "user", "content": prompt_p1}
             ],
             "format": schema,
             "stream": False,
             "options": {
-                "temperature": 0.2,
-                "repeat_penalty": 1.1,
-                "num_predict": 1024
+                "temperature": 0.1,
+                "repeat_penalty": 1.2,
+                "num_predict": 512
             }
         }
 
@@ -102,9 +94,10 @@ Return valid JSON matching the schema exactly. Do not output anything else.
                     if conf > 1.0:
                         parsed_data["confidence"] = conf / 100.0
 
+            parsed_data["type"] = finding.category
             parsed_data["fallback_used"] = False
             parsed_data["finding_id"] = finding.id
-            parsed_data["static_confidence"] = finding.confidence
+            parsed_data["model_used"] = self.model
             
             return VerifiedVulnerability(**parsed_data)
             
@@ -124,17 +117,19 @@ Return valid JSON matching the schema exactly. Do not output anything else.
         return VerifiedVulnerability(
             finding_id=finding.id,
             is_vulnerable=True,
-            vulnerability=finding.category,
+            type=finding.category,
+            swcId="N/A",
+            cweId="N/A",
             severity="High",
             confidence=finding.confidence,
-            static_confidence=finding.confidence,
-            affected_lines=[finding.line_start],
-            evidence=[],
-            explanation=f"Fallback triggered due to LLM failure. Static analyzer warning: {finding.message}",
-            attack_scenario="Attacker exploits vulnerable pattern based on static evidence.",
-            recommendation="Review the affected lines manually.",
-            original_code=context.function_source,
-            fixed_code="Manual review required.",
+            function=finding.function,
+            line=finding.line_start,
+            title=finding.category.replace("-", " ").title(),
+            description=f"Potential {finding.category} found in function {finding.function} at line {finding.line_start}. {finding.message}",
+            staticEvidence=finding.message,
+            attackScenario=f"Prerequisites: Attacker can invoke {finding.function}. Sequence: Attacker triggers the {finding.category} logic at line {finding.line_start}. Impact: Unsafe state modification or access violation specific to {finding.category}. Exploitability: Needs manual confirmation.",
+            recommendation=f"Apply standard {finding.category} remediation (e.g. Checks-Effects-Interactions, Access Control, SafeMath/0.8.x) to {finding.function} at line {finding.line_start}.",
+            codeSnippet=finding.snippet,
             fallback_used=True,
             fallback_reason=fallback_reason,
             raw_response=None

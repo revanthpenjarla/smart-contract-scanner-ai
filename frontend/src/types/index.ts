@@ -12,18 +12,21 @@ export interface AuthState {
 export interface VerifiedVulnerability {
   finding_id: string;
   is_vulnerable: boolean;
-  vulnerability: string;
+  type: string;
+  title: string;
   severity: 'Critical' | 'High' | 'Medium' | 'Low' | 'Informational';
   confidence: number;
-  affected_lines: number[];
-  evidence: { function: string; lines: number[] }[];
-  explanation: string;
-  attack_scenario: string;
+  function: string;
+  line: number;
+  description: string;
+  staticEvidence: string;
+  attackScenario: string;
   recommendation: string;
-  fixed_code: string;
-  static_evidence: string;
-  original_code: string;
-  retrieved_knowledge: Record<string, unknown>[];
+  fallback_used: boolean;
+  swcId: string;
+  cweId: string;
+  codeSnippet: string;
+  fixed_code?: string;
 }
 
 export interface VulnerabilityReport {

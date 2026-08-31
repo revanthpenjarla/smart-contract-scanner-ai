@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-
+import Navbar from '@/components/Navbar';
+import api from '@/api/client';
 export default function EvaluationDashboardPage() {
   const [data, setData] = useState<any>(null);
   const [rawData, setRawData] = useState<any[]>([]);
@@ -13,8 +14,8 @@ export default function EvaluationDashboardPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch('http://localhost:8000/api/evaluation/metrics').then(res => res.json()),
-      fetch('http://localhost:8000/api/evaluation/raw').then(res => res.json())
+      api.get('/api/evaluation/metrics').then(res => res.data),
+      api.get('/api/evaluation/raw').then(res => res.data)
     ])
       .then(([metricsData, rawResult]) => {
         if (metricsData.detail) setError(metricsData.detail);

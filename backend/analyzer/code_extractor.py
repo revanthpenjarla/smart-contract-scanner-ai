@@ -98,3 +98,70 @@ class CodeContextExtractor:
                     if found_first and brace_count == 0:
                         return idx + 1
         return len(lines)
+
+    def extract_candidates(self, source_code: str) -> List[Dict[str, Any]]:
+        """Extract function slices that perform state updates, external calls, or are payable"""
+        candidates = []
+        lines = source_code.splitlines()
+        
+        in_contract = False
+        contract_name = "Unknown"
+        
+        for i in range(len(lines)):
+            line = lines[i]
+            
+            # Detect contract
+            c_match = re.search(r'\bcontract\s+([a-zA-Z0-9_]+)', line)
+            if c_match:
+                contract_name = c_match.group(1)
+                in_contract = True
+            
+            # Detect function
+            if in_contract and re.search(r'\b(?:function\s+([a-zA-Z0-9_]*)|function\s*\(|constructor\s*\(|fallback\s*\(|receive\s*\()', line):
+                f_name = "fallback"
+                f_match = re.search(r'\b(?:function\s+([a-zA-Z0-9_]*)|function\s*\(|constructor\s*\(|fallback\s*\(|receive\s*\()', line)
+                if f_match:
+                    if f_match.group(1):
+                        f_name = f_match.group(1)
+                    elif 'constructor' in line:
+                        f_name = 'constructor'
+                    elif 'receive' in line:
+                        f_name = 'receive'
+                
+                start_line = i + 1
+                end_line = self._find_closing_brace(lines, i)
+                func_lines = lines[i:end_line]
+                
+                is_candidate = False
+                header = line
+                
+                # Condition 1: Payable
+                if 'payable' in header:
+                    is_candidate = True
+                
+                if not is_candidate:
+                    for f_line in func_lines:
+                        clean = re.sub(r'//.*$', '', f_line).strip()
+                        # Condition 2: External call
+                        if re.search(r'\.(call|transfer|send|delegatecall)\b', clean):
+                            is_candidate = True
+                            break
+                        # Condition 3: State modification
+                        if re.search(r'^(?!require|uint|int|address|bool|string|bytes)[a-zA-Z0-9_\[\]\.]+\s*(=|\+=|-=|\*=|/=)', clean):
+                            if 'msg.value' not in clean: # Ignore msg.value additions typical of payable functions
+                                is_candidate = True
+                                break
+                
+                if is_candidate:
+                    source_slice = chr(10).join(func_lines)
+                    candidates.append({
+                        "contract": contract_name,
+                        "function_name": f_name,
+                        "header": header,
+                        "source": source_slice,
+                        "line_start": start_line,
+                        "line_end": end_line,
+                        "state": chr(10).join(self._extract_state_variables(lines, start_line))
+                    })
+        
+        return candidates
