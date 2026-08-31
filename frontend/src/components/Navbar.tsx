@@ -21,10 +21,14 @@ export default function Navbar() {
             <Link to="/dashboard" className="text-gray-400 hover:text-white text-sm transition-colors">Dashboard</Link>
             <Link to="/scan" className="text-gray-400 hover:text-white text-sm transition-colors">New Scan</Link>
             <Link to="/history" className="text-gray-400 hover:text-white text-sm transition-colors">History</Link>
+            <Link to="/evaluation" className="text-gray-400 hover:text-white text-sm transition-colors">Metrics</Link>
           </>
         )}
         {isAdmin && (
-          <Link to="/admin" className="text-gray-400 hover:text-white text-sm transition-colors">Admin Dashboard</Link>
+          <>
+            <Link to="/admin" className="text-gray-400 hover:text-white text-sm transition-colors">Admin Dashboard</Link>
+            <Link to="/evaluation" className="text-gray-400 hover:text-white text-sm transition-colors">Metrics</Link>
+          </>
         )}
       </div>
       <div className="flex items-center gap-4">
