@@ -1,0 +1,11 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+*.db
+smart_contract_scanner.db
+frontend/node_modules
+frontend/dist
+.DS_Store

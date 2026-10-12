@@ -50,7 +50,7 @@ async def process_analysis_background(analysis_id: str, source_code: str, contra
                     total_findings=report_payload.total_findings,
                     is_vulnerable=report_payload.is_vulnerable,
                     severity_counts=report_payload.severity_counts,
-                    raw_findings=[],
+                    raw_findings={"mode": mode},
                     verified_findings=[f.model_dump() for f in report_payload.findings]
                 )
                 db.add(report)
@@ -162,6 +162,10 @@ async def get_analysis_by_id(
     if not rep:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report data unavailable")
 
+    rep_mode = "C"
+    if isinstance(rep.raw_findings, dict) and "mode" in rep.raw_findings:
+        rep_mode = rep.raw_findings["mode"]
+
     return VulnerabilityReportPayload(
         analysis_id=analysis.id,
         contract_name=analysis.contract_name,
@@ -170,5 +174,6 @@ async def get_analysis_by_id(
         is_vulnerable=rep.is_vulnerable,
         severity_counts=rep.severity_counts or {},
         findings=rep.verified_findings or [],
-        summary=rep.summary
+        summary=rep.summary,
+        mode=rep_mode
     )

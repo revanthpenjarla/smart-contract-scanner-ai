@@ -38,6 +38,7 @@ export interface VulnerabilityReport {
   severity_counts: Record<string, number>;
   findings: VerifiedVulnerability[];
   summary: string;
+  mode?: string;
 }
 
 export interface AnalysisHistoryItem {

@@ -10,7 +10,7 @@ class StaticFinding(BaseModel):
     category: str
     confidence: float
     message: str
-    snippet: str
+    snippet: str = ""
 
 class CodeContext(BaseModel):
     contract_name: str
@@ -49,6 +49,28 @@ class VerifiedVulnerability(BaseModel):
     model_used: Optional[str] = Field(None)
     raw_response: Optional[str] = Field(None)
 
+    # Presentation / UI compatibility fields
+    vulnerability: Optional[str] = Field(None, description="Vulnerability classification")
+    attack_scenario: Optional[str] = Field(None, description="Attack scenario")
+    static_evidence: Optional[str] = Field(None, description="Static evidence")
+    original_code: Optional[str] = Field(None, description="Original code snippet")
+    affected_lines: List[int] = Field(default_factory=list, description="Affected lines")
+    explanation: Optional[str] = Field(None, description="Vulnerability explanation")
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.vulnerability:
+            self.vulnerability = self.title or (self.type.replace("-", " ").title() if self.type else "")
+        if not self.attack_scenario:
+            self.attack_scenario = self.attackScenario
+        if not self.static_evidence:
+            self.static_evidence = self.staticEvidence
+        if not self.original_code:
+            self.original_code = self.codeSnippet
+        if not self.affected_lines and self.line:
+            self.affected_lines = [self.line]
+        if not self.explanation:
+            self.explanation = self.description
+
 class VulnerabilityReportPayload(BaseModel):
     analysis_id: str
     contract_name: str
@@ -58,3 +80,4 @@ class VulnerabilityReportPayload(BaseModel):
     severity_counts: Dict[str, int]
     findings: List[VerifiedVulnerability]
     summary: str
+    mode: str = "C"

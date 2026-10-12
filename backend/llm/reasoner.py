@@ -36,7 +36,7 @@ class LLMReasoner:
         schema["required"] = [k for k in schema.get("required", []) if k in fields_to_keep]
 
         compressed_code = self._compress_code(context.function_source)
-
+        kb_block = f"\nSECURITY KNOWLEDGE BASE GUIDANCE:\n{kb_context}\n" if kb_context else ""
         prompt_p1 = f"""You are a Solidity auditor. Extract and format the finding. Output strictly valid JSON matching the schema.
 
 STRICT REQUIREMENTS FOR EVERY FINDING:
@@ -55,7 +55,7 @@ Example TRUE POSITIVE:
 Finding: reentrancy at line 24 in withdraw
 Code: (bool s,) = msg.sender.call{{value: amt}}(""); balances[msg.sender] -= amt;
 Result: {{"is_vulnerable":true,"type":"reentrancy","swcId":"SWC-107","cweId":"CWE-841","severity":"High","confidence":0.95,"function":"withdraw","line":24,"title":"State Modification After External Call (Reentrancy)","description":"The withdraw function sends ETH to msg.sender using low-level call before updating the user balance mapping. This allows reentrancy because the state is not updated prior to handing over control flow.","staticEvidence":"msg.sender.call{{value: amt}}(\"\") at line 24 precedes balances[msg.sender] -= amt at line 26","attackScenario":"Prerequisites: Attacker deploys a malicious contract. Sequence: Attacker calls withdraw(). The raw call triggers the attacker's fallback function, which calls withdraw() again before balances[msg.sender] is decremented. Impact: Repeated withdrawals occur while the balance reflects the original value, allowing the attacker to drain the bank's entire ETH balance. Exploitability: High, directly exploitable.","recommendation":"Follow the Checks-Effects-Interactions pattern: update balances[msg.sender] -= amount before executing the external call, or use a ReentrancyGuard modifier."}}
-
+{kb_block}
 Now analyze:
 Finding: {finding.category} at line {finding.line_start} in {finding.function}
 Code:
@@ -114,14 +114,29 @@ Return ONLY valid JSON matching the schema.
             fallback_reason = f"Unexpected Error: {str(e)}"
             logger.error(f"LLM verification failed ({fallback_reason}), falling back to rule-based expert system.")
 
+        fallback_fixed_code = ""
+        swc_id = "N/A"
+        cwe_id = "N/A"
+        if kb_context and isinstance(kb_context, list) and len(kb_context) > 0:
+            top_entry = kb_context[0]
+            if isinstance(top_entry, dict):
+                fallback_fixed_code = top_entry.get("example_fixed", "")
+                swc_id = top_entry.get("id", "N/A")
+                cwe_id = top_entry.get("cwe", "N/A")
+
+        if not fallback_fixed_code and context and context.function_source:
+            fallback_fixed_code = f"// Remediation for {finding.category}\n{context.function_source}"
+
+        is_vuln = (finding.category != 'semantic-audit')
+
         return VerifiedVulnerability(
             finding_id=finding.id,
-            is_vulnerable=True,
+            is_vulnerable=is_vuln,
             type=finding.category,
-            swcId="N/A",
-            cweId="N/A",
-            severity="High",
-            confidence=finding.confidence,
+            swcId=swc_id,
+            cweId=cwe_id,
+            severity="High" if is_vuln else "Informational",
+            confidence=finding.confidence if is_vuln else 0.0,
             function=finding.function,
             line=finding.line_start,
             title=finding.category.replace("-", " ").title(),
@@ -130,6 +145,7 @@ Return ONLY valid JSON matching the schema.
             attackScenario=f"Prerequisites: Attacker can invoke {finding.function}. Sequence: Attacker triggers the {finding.category} logic at line {finding.line_start}. Impact: Unsafe state modification or access violation specific to {finding.category}. Exploitability: Needs manual confirmation.",
             recommendation=f"Apply standard {finding.category} remediation (e.g. Checks-Effects-Interactions, Access Control, SafeMath/0.8.x) to {finding.function} at line {finding.line_start}.",
             codeSnippet=finding.snippet,
+            fixed_code=fallback_fixed_code,
             fallback_used=True,
             fallback_reason=fallback_reason,
             raw_response=None

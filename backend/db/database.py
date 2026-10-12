@@ -17,3 +17,27 @@ async def get_db():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    # Ensure default demo accounts exist
+    from backend.db.models import User
+    from backend.core.security import hash_password
+    from sqlalchemy.future import select
+
+    async with AsyncSessionLocal() as session:
+        # Check auditor
+        res = await session.execute(select(User).where(User.email == "auditor@smai.security"))
+        if not res.scalar_one_or_none():
+            session.add(User(
+                email="auditor@smai.security",
+                hashed_password=hash_password("password123"),
+                role="USER"
+            ))
+        # Check admin
+        res_adm = await session.execute(select(User).where(User.email == "admin@smai.security"))
+        if not res_adm.scalar_one_or_none():
+            session.add(User(
+                email="admin@smai.security",
+                hashed_password=hash_password("admin123"),
+                role="ADMIN"
+            ))
+        await session.commit()

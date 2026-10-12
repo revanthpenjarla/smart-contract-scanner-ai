@@ -93,17 +93,25 @@ class SecurityPipeline:
         for finding in raw_findings:
             if mode == "A":
                 # Static only - bypass LLM completely, just convert to VerifiedVulnerability
+                swc = CATEGORY_SWC.get(finding.category, "")
+                cwe = CATEGORY_CWE.get(finding.category, "")
+                title = CATEGORY_TITLES.get(finding.category, finding.category.replace("-", " ").title())
                 verified = VerifiedVulnerability(
                     finding_id=finding.id,
                     is_vulnerable=True,
                     type=finding.category,
+                    swcId=swc,
+                    cweId=cwe,
+                    title=title,
                     severity=CATEGORY_SEVERITY.get(finding.category, "High"),
                     confidence=finding.confidence,
                     function=finding.function,
                     line=finding.line_start,
-                    description=f"Static analyzer flag: {finding.message}",
-                    attackScenario="N/A",
-                    recommendation="N/A",
+                    description=f"Static AST detector identified pattern: {finding.message}",
+                    attackScenario=f"Static rule flagged {finding.category} at line {finding.line_start} in function '{finding.function}'. Review callers and state modifications for exploitability.",
+                    recommendation=f"Review function '{finding.function}' and apply standard {finding.category} security patterns ({swc or 'EVM guidelines'}).",
+                    codeSnippet=finding.snippet,
+                    fixed_code=f"// Review and refactor line {finding.line_start}:\n{finding.snippet}" if finding.snippet else "",
                     fallback_used=False
                 )
             else:
@@ -158,10 +166,14 @@ class SecurityPipeline:
                     snippet=candidate.get("header", "")
                 )
                 
+                state_vars = [s.strip() for s in candidate.get("state", "").split("\n") if s.strip()]
                 context = CodeContext(
+                    contract_name=candidate.get("contract", contract_name or "Contract"),
                     function_name=candidate.get("function_name", "unknown"),
                     function_source=candidate.get("source", ""),
-                    contract_state=candidate.get("state", "")
+                    line_start=candidate.get("line_start", 1),
+                    line_end=candidate.get("line_end", 1),
+                    state_variables=state_vars
                 )
                 
                 verified = await self.reasoner.verify_finding(mock_finding, context, kb_context="Perform a deep semantic audit for complex logic vulnerabilities (e.g., reentrancy, denial of service, improper authorization) beyond simple regex matches.")
@@ -201,5 +213,6 @@ class SecurityPipeline:
             is_vulnerable=is_vuln,
             severity_counts=severity_counts,
             findings=verified_findings,
-            summary=summary
+            summary=summary,
+            mode=mode
         )

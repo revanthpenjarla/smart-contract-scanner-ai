@@ -1,273 +1,634 @@
-import React, { useState, useEffect } from 'react';
-import Navbar from '@/components/Navbar';
+import { useState, useEffect } from 'react';
+import AppLayout from '@/components/AppLayout';
 import api from '@/api/client';
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from '@/components/ui/card';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { AlertTriangle } from 'lucide-react';
+
+interface MetricObj {
+  precision: number;
+  recall: number;
+  f1: number;
+  accuracy: number;
+  fpr: number;
+  fnr: number;
+  mean_conf_correct?: number;
+  mean_conf_incorrect?: number;
+}
+
+interface ModeData {
+  dataset: string;
+  model: string;
+  mode: string;
+  prompt?: string;
+  metrics: MetricObj;
+  TP: number;
+  TN: number;
+  FP: number;
+  FN: number;
+  infra_failures: number;
+  partially_grounded?: number;
+  generic?: number;
+  hallucinated?: number;
+  vuln_classes?: Record<string, { TP: number; TN: number; FP: number; FN: number }>;
+  severity_matrix?: Record<string, Record<string, number>>;
+}
+
+interface RawResult {
+  dataset?: string;
+  contract: string;
+  mode: string;
+  model: string;
+  prompt?: string;
+  is_vulnerable: boolean | null;
+  vulnerability?: string;
+  severity?: string;
+  fallback_used?: boolean;
+}
+
 export default function EvaluationDashboardPage() {
-  const [data, setData] = useState<any>(null);
-  const [rawData, setRawData] = useState<any[]>([]);
+  const [data, setData] = useState<Record<string, ModeData> | null>(null);
+  const [rawData, setRawData] = useState<RawResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('summary');
-  
+
   // Filters
   const [selectedDataset, setSelectedDataset] = useState('Internal Diagnostic Suite');
   const [selectedPrompt, setSelectedPrompt] = useState('P1');
 
   useEffect(() => {
     Promise.all([
-      api.get('/api/evaluation/metrics').then(res => res.data),
-      api.get('/api/evaluation/raw').then(res => res.data)
+      api.get('/api/evaluation/metrics').then((res) => res.data),
+      api.get('/api/evaluation/raw').then((res) => res.data),
     ])
       .then(([metricsData, rawResult]) => {
         if (metricsData.detail) setError(metricsData.detail);
         else setData(metricsData);
-        
+
         if (!rawResult.detail) setRawData(rawResult);
         setLoading(false);
       })
-      .catch(err => {
+      .catch((err) => {
         setError(err.message);
         setLoading(false);
       });
   }, []);
 
-  if (loading) return <div className="p-8">Loading evaluation data...</div>;
-  if (error) return <div className="p-8 text-red-500">Error: {error}</div>;
-  if (!data) return <div className="p-8">No data available.</div>;
+  if (loading) {
+    return (
+      <AppLayout title="Benchmark Metrics" subtitle="Loading Empirical Evaluation">
+        <div className="flex flex-col items-center justify-center p-16 text-center space-y-3">
+          <div className="w-8 h-8 border-2 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin" />
+          <p className="text-xs text-slate-400">Loading benchmark evaluation metrics...</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (error) {
+    return (
+      <AppLayout title="Benchmark Metrics" subtitle="Evaluation Error">
+        <div className="max-w-xl mx-auto p-12 text-center text-red-400 text-xs">
+          Error loading evaluation data: {error}
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (!data) {
+    return (
+      <AppLayout title="Benchmark Metrics" subtitle="No Data Available">
+        <div className="max-w-xl mx-auto p-12 text-center text-slate-400 text-xs">
+          No benchmark evaluation metrics currently available.
+        </div>
+      </AppLayout>
+    );
+  }
 
   // Derive unique filters
-  const allDatasets = Array.from(new Set(Object.values(data).map((v: any) => v.dataset)));
-  const allPrompts = Array.from(new Set(Object.values(data).map((v: any) => v.prompt).filter(p => p !== undefined)));
+  const allDatasets = Array.from(new Set(Object.values(data).map((v) => v.dataset)));
+  const allPrompts = Array.from(
+    new Set(Object.values(data).map((v) => v.prompt).filter((p): p is string => Boolean(p)))
+  );
 
   // Filter keys based on selected dataset and prompt (Static mode is prompt-agnostic)
-  const modes = Object.keys(data).filter(key => 
-    data[key].dataset === selectedDataset && 
-    (data[key].model === "static" || data[key].prompt === selectedPrompt)
+  const modes = Object.keys(data).filter(
+    (key) =>
+      data[key].dataset === selectedDataset &&
+      (data[key].model === 'static' || data[key].prompt === selectedPrompt)
   );
-  
-  return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <h1 className="text-3xl font-bold mb-8">Smart Contract Scanner Evaluation Dashboard</h1>
-      
-      <div className="flex space-x-4 mb-8 bg-gray-100 p-4 rounded-lg items-center">
-        <div className="flex flex-col">
-          <label className="text-sm font-semibold mb-1">Dataset</label>
-          <select 
-            value={selectedDataset} 
-            onChange={e => setSelectedDataset(e.target.value)}
-            className="border p-2 rounded"
-          >
-            {allDatasets.map(ds => <option key={ds} value={ds}>{ds}</option>)}
-            {allDatasets.length === 1 && <option value="SmartBugs Curated">SmartBugs Curated (Pending)</option>}
-          </select>
-        </div>
-        
-        <div className="flex flex-col ml-4">
-          <label className="text-sm font-semibold mb-1">Prompt Condition</label>
-          <select 
-            value={selectedPrompt} 
-            onChange={e => setSelectedPrompt(e.target.value)}
-            className="border p-2 rounded"
-          >
-            {allPrompts.map(p => <option key={p} value={p}>{p === 'P0' ? 'P0 (Baseline)' : 'P1 (Source-Grounding)'}</option>)}
-            {allPrompts.length === 1 && <option value="P0">P0 (Pending run)</option>}
-          </select>
-        </div>
-      </div>
 
-      <div className="flex space-x-4 mb-8 border-b pb-4 overflow-x-auto">
-        <button onClick={() => setActiveTab('summary')} className={`px-4 py-2 rounded ${activeTab === 'summary' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Overall Metrics</button>
-        <button onClick={() => setActiveTab('comparison')} className={`px-4 py-2 rounded ${activeTab === 'comparison' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Model & RAG Ablation</button>
-        <button onClick={() => setActiveTab('prompt_ablation')} className={`px-4 py-2 rounded ${activeTab === 'prompt_ablation' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Prompt Ablation (P0 vs P1)</button>
-        <button onClick={() => setActiveTab('details')} className={`px-4 py-2 rounded ${activeTab === 'details' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Vulnerability & Severity</button>
-        <button onClick={() => setActiveTab('grounding')} className={`px-4 py-2 rounded ${activeTab === 'grounding' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Grounding & Confidence</button>
-        <button onClick={() => setActiveTab('contracts')} className={`px-4 py-2 rounded ${activeTab === 'contracts' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Contract-Level</button>
-      </div>
-      
-      {activeTab === 'summary' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {modes.map(mode => (
-            <div key={mode} className="bg-white p-6 rounded-lg shadow border border-gray-200">
-              <h2 className="text-xl font-bold mb-4">{mode}</h2>
-              <div className="space-y-2">
-                <div className="flex justify-between"><span className="text-gray-600">Precision:</span><span className="font-semibold">{(data[mode].metrics.precision * 100).toFixed(1)}%</span></div>
-                <div className="flex justify-between"><span className="text-gray-600">Recall:</span><span className="font-semibold">{(data[mode].metrics.recall * 100).toFixed(1)}%</span></div>
-                <div className="flex justify-between"><span className="text-gray-600">F1 Score:</span><span className="font-semibold">{(data[mode].metrics.f1 * 100).toFixed(1)}%</span></div>
-                <div className="flex justify-between"><span className="text-gray-600">Accuracy:</span><span className="font-semibold">{(data[mode].metrics.accuracy * 100).toFixed(1)}%</span></div>
-                <div className="flex justify-between"><span className="text-gray-600">FPR:</span><span className="font-semibold">{(data[mode].metrics.fpr * 100).toFixed(1)}%</span></div>
-                <div className="flex justify-between"><span className="text-gray-600">FNR:</span><span className="font-semibold">{(data[mode].metrics.fnr * 100).toFixed(1)}%</span></div>
-                <div className="mt-4 pt-4 border-t">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">TP: {data[mode].TP}</span>
-                    <span className="text-gray-500">TN: {data[mode].TN}</span>
-                    <span className="text-gray-500">FP: {data[mode].FP}</span>
-                    <span className="text-gray-500">FN: {data[mode].FN}</span>
+  const tabs = [
+    { id: 'summary', label: 'Overall Metrics' },
+    { id: 'comparison', label: 'Model & RAG Ablation' },
+    { id: 'prompt_ablation', label: 'Prompt Ablation (P0 vs P1)' },
+    { id: 'details', label: 'Vulnerability Breakdown' },
+    { id: 'grounding', label: 'Grounding & Calibration' },
+    { id: 'contracts', label: 'Contract-Level Results' },
+  ];
+
+  return (
+    <AppLayout
+      title="Scanner Benchmark & Ablation Metrics"
+      subtitle="Empirical precision, recall, F1, and grounding metrics across Static, RAG, and LLM reasoners"
+    >
+      <div className="space-y-6">
+
+        {/* Dataset & Prompt Filter Bar */}
+        <div className="flex flex-wrap items-center gap-4 bg-[#0b1120]/80 border border-slate-800/80 p-4 rounded-xl">
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+              Evaluation Dataset
+            </label>
+            <select
+              value={selectedDataset}
+              onChange={(e) => setSelectedDataset(e.target.value)}
+              className="bg-slate-900 border border-slate-700/80 text-slate-100 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            >
+              {allDatasets.map((ds) => (
+                <option key={ds} value={ds}>
+                  {ds}
+                </option>
+              ))}
+              {allDatasets.length === 1 && (
+                <option value="SmartBugs Curated">SmartBugs Curated (Pending)</option>
+              )}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+              Prompt Condition
+            </label>
+            <select
+              value={selectedPrompt}
+              onChange={(e) => setSelectedPrompt(e.target.value)}
+              className="bg-slate-900 border border-slate-700/80 text-slate-100 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            >
+              {allPrompts.map((p) => (
+                <option key={p} value={p}>
+                  {p === 'P0' ? 'P0 (Baseline Reasoning)' : 'P1 (Source-Grounding)'}
+                </option>
+              ))}
+              {allPrompts.length === 1 && <option value="P0">P0 (Pending run)</option>}
+            </select>
+          </div>
+        </div>
+
+        {/* Tab Controls */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 bg-slate-900/80 border border-slate-800 p-1.5 rounded-xl">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setActiveTab(t.id)}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                activeTab === t.id
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab 1: Overall Metrics Cards */}
+        {activeTab === 'summary' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {modes.map((mode) => (
+              <Card
+                key={mode}
+                className="bg-[#0b1120]/80 border-slate-800/80 hover:border-slate-700/80 transition-all"
+              >
+                <CardHeader className="pb-3 border-b border-slate-800/60">
+                  <CardTitle className="text-sm font-bold text-slate-100 font-mono">
+                    {mode}
+                  </CardTitle>
+                  <CardDescription className="text-[11px] text-slate-400">
+                    Model: {data[mode].model} · Mode: {data[mode].mode}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-4 space-y-2 text-xs">
+                  <div className="flex justify-between py-1 border-b border-slate-800/40">
+                    <span className="text-slate-400">Precision:</span>
+                    <span className="font-mono font-bold text-cyan-400">
+                      {(data[mode].metrics.precision * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-800/40">
+                    <span className="text-slate-400">Recall:</span>
+                    <span className="font-mono font-bold text-blue-400">
+                      {(data[mode].metrics.recall * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-800/40">
+                    <span className="text-slate-400">F1 Score:</span>
+                    <span className="font-mono font-bold text-purple-400">
+                      {(data[mode].metrics.f1 * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-800/40">
+                    <span className="text-slate-400">Accuracy:</span>
+                    <span className="font-mono font-bold text-emerald-400">
+                      {(data[mode].metrics.accuracy * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-800/40">
+                    <span className="text-slate-400">False Positive Rate (FPR):</span>
+                    <span className="font-mono text-slate-300">
+                      {(data[mode].metrics.fpr * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1">
+                    <span className="text-slate-400">False Negative Rate (FNR):</span>
+                    <span className="font-mono text-slate-300">
+                      {(data[mode].metrics.fnr * 100).toFixed(1)}%
+                    </span>
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-slate-800/80 grid grid-cols-4 gap-2 text-center text-[10px]">
+                    <div className="bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                      <div className="text-slate-500">TP</div>
+                      <div className="text-emerald-400 font-bold font-mono">{data[mode].TP}</div>
+                    </div>
+                    <div className="bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                      <div className="text-slate-500">TN</div>
+                      <div className="text-emerald-400 font-bold font-mono">{data[mode].TN}</div>
+                    </div>
+                    <div className="bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                      <div className="text-slate-500">FP</div>
+                      <div className="text-red-400 font-bold font-mono">{data[mode].FP}</div>
+                    </div>
+                    <div className="bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                      <div className="text-slate-500">FN</div>
+                      <div className="text-red-400 font-bold font-mono">{data[mode].FN}</div>
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-red-400/80 pt-2 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Failures (Timeout/OOM): {data[mode].infra_failures}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {/* Tab 2: Comparison Matrix Table */}
+        {activeTab === 'comparison' && (
+          <Card className="bg-[#0b1120]/90 border-slate-800/80 shadow-2xl overflow-hidden">
+            <CardHeader className="pb-3 border-b border-slate-800/60">
+              <CardTitle className="text-sm font-semibold text-slate-100">
+                Ablation Comparison Matrix (Static vs RAG vs LLM)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-slate-800/80 hover:bg-transparent">
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Mode / Model</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Precision</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Recall</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">F1 Score</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Accuracy</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Infra Failures</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {modes.map((mode) => (
+                    <TableRow
+                      key={mode}
+                      className="border-slate-800/60 hover:bg-slate-800/30 transition-colors"
+                    >
+                      <TableCell className="px-5 py-3.5 font-mono text-xs font-bold text-slate-100">
+                        {mode}
+                      </TableCell>
+                      <TableCell className="px-5 py-3.5 text-xs font-mono text-cyan-400 font-semibold">
+                        {(data[mode].metrics.precision * 100).toFixed(1)}%
+                      </TableCell>
+                      <TableCell className="px-5 py-3.5 text-xs font-mono text-blue-400 font-semibold">
+                        {(data[mode].metrics.recall * 100).toFixed(1)}%
+                      </TableCell>
+                      <TableCell className="px-5 py-3.5 text-xs font-mono text-purple-400 font-semibold">
+                        {(data[mode].metrics.f1 * 100).toFixed(1)}%
+                      </TableCell>
+                      <TableCell className="px-5 py-3.5 text-xs font-mono text-emerald-400 font-semibold">
+                        {(data[mode].metrics.accuracy * 100).toFixed(1)}%
+                      </TableCell>
+                      <TableCell className="px-5 py-3.5 text-xs font-mono text-red-400 font-semibold">
+                        {data[mode].infra_failures}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Tab 3: Prompt Ablation Table */}
+        {activeTab === 'prompt_ablation' && (
+          <Card className="bg-[#0b1120]/90 border-slate-800/80 shadow-2xl overflow-hidden">
+            <CardHeader className="pb-3 border-b border-slate-800/60">
+              <CardTitle className="text-sm font-semibold text-slate-100">
+                Prompt Ablation Analysis (P0 Baseline vs P1 Source-Grounding)
+              </CardTitle>
+              <CardDescription className="text-xs text-slate-400">
+                Evaluating the impact of injecting AST grounded evidence vs standard general prompt
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-slate-800/80 hover:bg-transparent">
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Configuration</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Prompt Condition</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Precision</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">Recall</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">F1 Score</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-5 py-3">FPR</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Object.keys(data)
+                    .filter((k) => data[k].model !== 'static' && data[k].dataset === selectedDataset)
+                    .map((key) => (
+                      <TableRow
+                        key={key}
+                        className="border-slate-800/60 hover:bg-slate-800/30 transition-colors"
+                      >
+                        <TableCell className="px-5 py-3.5 font-mono text-xs font-semibold text-slate-100">
+                          {data[key].mode} - {data[key].model}
+                        </TableCell>
+                        <TableCell className="px-5 py-3.5 text-xs font-mono">
+                          <Badge variant="outline" className="text-[10px] text-cyan-300 border-cyan-700/50">
+                            {data[key].prompt}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="px-5 py-3.5 text-xs font-mono text-cyan-400">
+                          {(data[key].metrics.precision * 100).toFixed(1)}%
+                        </TableCell>
+                        <TableCell className="px-5 py-3.5 text-xs font-mono text-blue-400">
+                          {(data[key].metrics.recall * 100).toFixed(1)}%
+                        </TableCell>
+                        <TableCell className="px-5 py-3.5 text-xs font-mono text-purple-400">
+                          {(data[key].metrics.f1 * 100).toFixed(1)}%
+                        </TableCell>
+                        <TableCell className="px-5 py-3.5 text-xs font-mono text-slate-400">
+                          {(data[key].metrics.fpr * 100).toFixed(1)}%
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Tab 4: Vulnerability & Severity breakdown */}
+        {activeTab === 'details' && (
+          <div className="space-y-6">
+            {modes.map((mode) => (
+              <Card key={mode} className="bg-[#0b1120]/80 border-slate-800/80 p-5 space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800/60">
+                  <h3 className="text-sm font-bold text-white font-mono">{mode}</h3>
+                  <Badge variant="outline" className="text-[10px] text-slate-400">
+                    Per-Vulnerability Statistics
+                  </Badge>
+                </div>
+
+                {data[mode].vuln_classes && (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-slate-800/80">
+                          <TableHead className="text-slate-400 text-xs px-3 py-2">Vulnerability Pattern</TableHead>
+                          <TableHead className="text-slate-400 text-xs px-3 py-2">TP</TableHead>
+                          <TableHead className="text-slate-400 text-xs px-3 py-2">TN</TableHead>
+                          <TableHead className="text-slate-400 text-xs px-3 py-2">FP</TableHead>
+                          <TableHead className="text-slate-400 text-xs px-3 py-2">FN</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {Object.entries(data[mode].vuln_classes || {}).map(([vuln, counts]) => (
+                          <TableRow key={vuln} className="border-slate-800/40">
+                            <TableCell className="px-3 py-2 font-mono text-xs text-slate-200">
+                              {vuln}
+                            </TableCell>
+                            <TableCell className="px-3 py-2 text-emerald-400 font-mono text-xs font-bold">
+                              {counts.TP}
+                            </TableCell>
+                            <TableCell className="px-3 py-2 text-emerald-400 font-mono text-xs font-bold">
+                              {counts.TN}
+                            </TableCell>
+                            <TableCell className="px-3 py-2 text-red-400 font-mono text-xs font-bold">
+                              {counts.FP}
+                            </TableCell>
+                            <TableCell className="px-3 py-2 text-red-400 font-mono text-xs font-bold">
+                              {counts.FN}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                {data[mode].severity_matrix && (
+                  <div className="pt-2">
+                    <h4 className="text-xs font-semibold text-slate-300 mb-2">
+                      Severity Confusion Matrix (Predicted vs Actual)
+                    </h4>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-slate-800/80 bg-slate-900/40">
+                            <TableHead className="text-slate-400 text-xs px-3 py-2">Pred \ Actual</TableHead>
+                            <TableHead className="text-slate-400 text-xs px-3 py-2">Critical</TableHead>
+                            <TableHead className="text-slate-400 text-xs px-3 py-2">High</TableHead>
+                            <TableHead className="text-slate-400 text-xs px-3 py-2">Medium</TableHead>
+                            <TableHead className="text-slate-400 text-xs px-3 py-2">Low</TableHead>
+                            <TableHead className="text-slate-400 text-xs px-3 py-2">Informational</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {Object.entries(data[mode].severity_matrix || {}).map(([pred, actuals]) => (
+                            <TableRow key={pred} className="border-slate-800/40">
+                              <TableCell className="px-3 py-2 font-mono text-xs font-bold text-slate-200">
+                                {pred}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 font-mono text-xs">
+                                {actuals['Critical'] || 0}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 font-mono text-xs">
+                                {actuals['High'] || 0}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 font-mono text-xs">
+                                {actuals['Medium'] || 0}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 font-mono text-xs">
+                                {actuals['Low'] || 0}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 font-mono text-xs">
+                                {actuals['Informational'] || 0}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {/* Tab 5: Grounding & Confidence calibration */}
+        {activeTab === 'grounding' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {modes.map((mode) => (
+              <Card key={mode} className="bg-[#0b1120]/80 border-slate-800/80 p-5 space-y-4">
+                <h3 className="text-sm font-bold text-white font-mono pb-2 border-b border-slate-800/60">
+                  {mode}
+                </h3>
+                <div className="space-y-4 text-xs">
+                  <div>
+                    <h4 className="font-semibold text-cyan-400 uppercase tracking-wider text-[11px] mb-2">
+                      Grounding Quality
+                    </h4>
+                    <div className="space-y-1.5 bg-slate-900/60 p-3 rounded-lg border border-slate-800">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Fully/Partially Grounded:</span>
+                        <span className="font-mono text-emerald-400 font-bold">
+                          {data[mode].partially_grounded ?? 0}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Generic but Valid:</span>
+                        <span className="font-mono text-amber-400 font-bold">
+                          {data[mode].generic ?? 0}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Hallucinated Context:</span>
+                        <span className="font-mono text-red-400 font-bold">
+                          {data[mode].hallucinated ?? 0}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="font-semibold text-purple-400 uppercase tracking-wider text-[11px] mb-2">
+                      Confidence Calibration
+                    </h4>
+                    <div className="space-y-1.5 bg-slate-900/60 p-3 rounded-lg border border-slate-800">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Mean Confidence (Correct):</span>
+                        <span className="font-mono text-slate-200 font-bold">
+                          {data[mode].metrics.mean_conf_correct
+                            ? `${(data[mode].metrics.mean_conf_correct * 100).toFixed(1)}%`
+                            : 'N/A'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Mean Confidence (Incorrect):</span>
+                        <span className="font-mono text-slate-200 font-bold">
+                          {data[mode].metrics.mean_conf_incorrect
+                            ? `${(data[mode].metrics.mean_conf_incorrect * 100).toFixed(1)}%`
+                            : 'N/A'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="mt-2 text-sm text-red-600">Infra Failures (OOM/Timeout): {data[mode].infra_failures}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+              </Card>
+            ))}
+          </div>
+        )}
 
-      {activeTab === 'comparison' && (
-        <div className="bg-white p-6 rounded-lg shadow border border-gray-200 overflow-x-auto">
-           <h2 className="text-xl font-bold mb-4">Comparison Matrix (Static vs RAG vs Model)</h2>
-           <table className="w-full text-left border-collapse min-w-max">
-             <thead>
-               <tr className="bg-gray-100">
-                 <th className="p-3 border">Mode/Model</th>
-                 <th className="p-3 border">Precision</th>
-                 <th className="p-3 border">Recall</th>
-                 <th className="p-3 border">F1</th>
-                 <th className="p-3 border">Accuracy</th>
-                 <th className="p-3 border">Failures</th>
-               </tr>
-             </thead>
-             <tbody>
-               {modes.map(mode => (
-                 <tr key={mode} className="border-b hover:bg-gray-50">
-                   <td className="p-3 border font-semibold">{mode}</td>
-                   <td className="p-3 border">{(data[mode].metrics.precision * 100).toFixed(1)}%</td>
-                   <td className="p-3 border">{(data[mode].metrics.recall * 100).toFixed(1)}%</td>
-                   <td className="p-3 border">{(data[mode].metrics.f1 * 100).toFixed(1)}%</td>
-                   <td className="p-3 border">{(data[mode].metrics.accuracy * 100).toFixed(1)}%</td>
-                   <td className="p-3 border text-red-600">{data[mode].infra_failures}</td>
-                 </tr>
-               ))}
-             </tbody>
-           </table>
-        </div>
-      )}
-
-      {activeTab === 'prompt_ablation' && (
-        <div className="bg-white p-6 rounded-lg shadow border border-gray-200 overflow-x-auto">
-           <h2 className="text-xl font-bold mb-4">Prompt Ablation (P0 vs P1)</h2>
-           <p className="mb-4 text-gray-600">Comparing the Minimal Baseline Auditing Prompt (P0) against the Source-Grounding Prompt (P1).</p>
-           <table className="w-full text-left border-collapse min-w-max">
-             <thead>
-               <tr className="bg-gray-100">
-                 <th className="p-3 border">Configuration</th>
-                 <th className="p-3 border">Prompt</th>
-                 <th className="p-3 border">Precision</th>
-                 <th className="p-3 border">Recall</th>
-                 <th className="p-3 border">F1</th>
-                 <th className="p-3 border">FPR</th>
-               </tr>
-             </thead>
-             <tbody>
-               {Object.keys(data).filter(k => data[k].model !== 'static' && data[k].dataset === selectedDataset).map(key => (
-                 <tr key={key} className="border-b hover:bg-gray-50">
-                   <td className="p-3 border font-semibold">{data[key].mode} - {data[key].model}</td>
-                   <td className="p-3 border">{data[key].prompt}</td>
-                   <td className="p-3 border">{(data[key].metrics.precision * 100).toFixed(1)}%</td>
-                   <td className="p-3 border">{(data[key].metrics.recall * 100).toFixed(1)}%</td>
-                   <td className="p-3 border">{(data[key].metrics.f1 * 100).toFixed(1)}%</td>
-                   <td className="p-3 border">{(data[key].metrics.fpr * 100).toFixed(1)}%</td>
-                 </tr>
-               ))}
-             </tbody>
-           </table>
-        </div>
-      )}
-
-      {activeTab === 'details' && (
-        <div className="bg-white p-6 rounded-lg shadow border border-gray-200">
-          <h2 className="text-xl font-bold mb-4">Per-Vulnerability Breakdown</h2>
-          {modes.map(mode => (
-            <div key={mode} className="mb-8">
-              <h3 className="text-lg font-semibold bg-gray-100 p-2 rounded">{mode}</h3>
-              <table className="w-full text-left border-collapse mt-2">
-                <thead><tr><th className="p-2 border">Vulnerability</th><th className="p-2 border">TP</th><th className="p-2 border">TN</th><th className="p-2 border">FP</th><th className="p-2 border">FN</th></tr></thead>
-                <tbody>
-                  {Object.entries(data[mode].vuln_classes).map(([vuln, counts]: [string, any]) => (
-                    <tr key={vuln}>
-                      <td className="p-2 border">{vuln}</td><td className="p-2 border text-green-600">{counts.TP}</td><td className="p-2 border text-green-600">{counts.TN}</td><td className="p-2 border text-red-600">{counts.FP}</td><td className="p-2 border text-red-600">{counts.FN}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <h4 className="font-semibold mt-6 mb-2">Severity Confusion Matrix (Predicted vs Actual)</h4>
-              <table className="w-full text-left border-collapse mt-2">
-                <thead><tr className="bg-gray-50"><th className="p-2 border">Predicted \ Actual</th><th className="p-2 border">Critical</th><th className="p-2 border">High</th><th className="p-2 border">Medium</th><th className="p-2 border">Low</th><th className="p-2 border">Informational</th></tr></thead>
-                <tbody>
-                  {Object.entries(data[mode].severity_matrix).map(([pred, actuals]: [string, any]) => (
-                    <tr key={pred}>
-                      <td className="p-2 border font-semibold">{pred}</td>
-                      <td className="p-2 border">{actuals["Critical"] || 0}</td><td className="p-2 border">{actuals["High"] || 0}</td><td className="p-2 border">{actuals["Medium"] || 0}</td><td className="p-2 border">{actuals["Low"] || 0}</td><td className="p-2 border">{actuals["Informational"] || 0}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === 'grounding' && (
-        <div className="bg-white p-6 rounded-lg shadow border border-gray-200">
-          <h2 className="text-xl font-bold mb-4">Grounding & Confidence Calibration</h2>
-          {modes.map(mode => (
-            <div key={mode} className="mb-6 border-b pb-4">
-              <h3 className="text-lg font-semibold mb-2">{mode}</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <h4 className="font-semibold">Grounding Quality</h4>
-                  <ul className="list-disc pl-5">
-                    <li>Fully/Partially Grounded: {data[mode].partially_grounded}</li>
-                    <li>Generic but Valid: {data[mode].generic}</li>
-                    <li>Hallucinated: {data[mode].hallucinated}</li>
-                  </ul>
-                </div>
-                <div>
-                  <h4 className="font-semibold">Confidence Calibration</h4>
-                  <ul className="list-disc pl-5">
-                    <li>Mean Confidence (Correct): {(data[mode].metrics.mean_conf_correct * 100).toFixed(1)}%</li>
-                    <li>Mean Confidence (Incorrect): {(data[mode].metrics.mean_conf_incorrect * 100).toFixed(1)}%</li>
-                  </ul>
-                  {Math.abs(data[mode].metrics.mean_conf_correct - data[mode].metrics.mean_conf_incorrect) < 0.1 && (
-                    <span className="inline-block mt-2 px-2 py-1 bg-red-100 text-red-800 text-xs rounded">Confidence is not calibrated</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === 'contracts' && (
-        <div className="bg-white p-6 rounded-lg shadow border border-gray-200 overflow-x-auto">
-          <h2 className="text-xl font-bold mb-4">Contract-Level Results</h2>
-          <table className="w-full text-left border-collapse text-sm min-w-max">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="p-2 border">Contract</th>
-                <th className="p-2 border">Mode</th>
-                <th className="p-2 border">Model</th>
-                <th className="p-2 border">Prompt</th>
-                <th className="p-2 border">Is Vuln?</th>
-                <th className="p-2 border">Vulnerability</th>
-                <th className="p-2 border">Severity</th>
-                <th className="p-2 border">Fallback?</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rawData.filter(r => (r.dataset || "Internal Diagnostic Suite") === selectedDataset).map((r, i) => (
-                <tr key={i} className="border-b hover:bg-gray-50">
-                  <td className="p-2 border">{r.contract}</td>
-                  <td className="p-2 border">{r.mode}</td>
-                  <td className="p-2 border">{r.model}</td>
-                  <td className="p-2 border">{r.prompt || 'P1'}</td>
-                  <td className="p-2 border">{r.is_vulnerable !== null ? r.is_vulnerable.toString() : 'Error'}</td>
-                  <td className="p-2 border">{r.vulnerability || '-'}</td>
-                  <td className="p-2 border">{r.severity || '-'}</td>
-                  <td className="p-2 border">{r.fallback_used ? 'Yes' : 'No'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+        {/* Tab 6: Contract-Level Raw Results */}
+        {activeTab === 'contracts' && (
+          <Card className="bg-[#0b1120]/90 border-slate-800/80 shadow-2xl overflow-hidden">
+            <CardHeader className="pb-3 border-b border-slate-800/60">
+              <CardTitle className="text-sm font-semibold text-slate-100">
+                Individual Contract Diagnostic Traces
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-slate-800/80 hover:bg-transparent">
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Contract</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Mode</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Model</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Prompt</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Vulnerable?</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Vulnerability</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Severity</TableHead>
+                    <TableHead className="text-slate-400 text-xs px-4 py-3">Fallback?</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rawData
+                    .filter(
+                      (r) => (r.dataset || 'Internal Diagnostic Suite') === selectedDataset
+                    )
+                    .map((r, i) => (
+                      <TableRow
+                        key={i}
+                        className="border-slate-800/60 hover:bg-slate-800/30 transition-colors"
+                      >
+                        <TableCell className="px-4 py-3 font-mono text-xs text-slate-100">
+                          {r.contract}
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-xs text-slate-400">{r.mode}</TableCell>
+                        <TableCell className="px-4 py-3 text-xs text-slate-400">{r.model}</TableCell>
+                        <TableCell className="px-4 py-3 text-xs text-slate-400">
+                          {r.prompt || 'P1'}
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-xs font-semibold">
+                          {r.is_vulnerable === true ? (
+                            <span className="text-red-400">Yes</span>
+                          ) : r.is_vulnerable === false ? (
+                            <span className="text-emerald-400">No</span>
+                          ) : (
+                            <span className="text-slate-500">Error</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="px-4 py-3 font-mono text-xs text-slate-300">
+                          {r.vulnerability || '—'}
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-xs">{r.severity || '—'}</TableCell>
+                        <TableCell className="px-4 py-3 text-xs text-slate-400">
+                          {r.fallback_used ? 'Yes' : 'No'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </AppLayout>
   );
 }
