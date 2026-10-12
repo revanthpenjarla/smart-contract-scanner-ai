@@ -527,7 +527,7 @@ Return valid JSON matching the schema exactly. Do not output anything else.
             "options": {
                 "temperature": 0.2,
                 "repeat_penalty": 1.1,
-                "num_predict": 512
+                "num_predict": 256
             }
         }
 

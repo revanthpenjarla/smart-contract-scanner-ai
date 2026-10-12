@@ -152,7 +152,9 @@ class SecurityPipeline:
         normalized_mode = mode_mapping.get(mode_str, "hybrid")
         
         raw_findings = self.analyzer.analyze(source_code, contract_name)
+        raw_count = len(raw_findings)
         verified_findings: List[VerifiedVulnerability] = []
+        suppressed_findings: List[VerifiedVulnerability] = []
         severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Informational": 0}
 
         if normalized_mode == "rag":
@@ -178,6 +180,7 @@ class SecurityPipeline:
                     finding_id=finding.id,
                     is_vulnerable=True,
                     verification_status=v_status,
+                    verifier_source="Static AST (No AI)",
                     vulnerability=finding.category,
                     severity=sev,
                     confidence=calibrated_conf,
@@ -208,10 +211,10 @@ class SecurityPipeline:
                     knowledge = self.retriever.retrieve(finding, context, top_k=2)
                 return await self.reasoner.verify_finding(finding, context, knowledge)
             
-            results = []
-            for f in raw_findings:
-                result = await verify_single_finding(f)
-                results.append(result)
+            if raw_findings:
+                results = await asyncio.gather(*[verify_single_finding(f) for f in raw_findings])
+            else:
+                results = []
             
             for verified in results:
                 if verified.is_vulnerable or verified.verification_status in ["CONFIRMED", "UNVERIFIED"]:
@@ -219,7 +222,14 @@ class SecurityPipeline:
                          verified.retrieved_knowledge = []
                          verified.rag_similarity_score = None
                          verified.rag_explanation = None
+                    if verified.fallback_used:
+                        verified.verifier_source = f"Fallback ({verified.fallback_reason or 'AI Unavailable'})"
+                    else:
+                        verified.verifier_source = f"AI Verified ({getattr(self.reasoner, 'model', 'Qwen2.5-Coder')})"
                     verified_findings.append(verified)
+                else:
+                    verified.verifier_source = f"AI Suppressed ({getattr(self.reasoner, 'model', 'Qwen2.5-Coder')})"
+                    suppressed_findings.append(verified)
 
         for verified in verified_findings:
             sev = str(verified.severity).title()
@@ -232,14 +242,19 @@ class SecurityPipeline:
         is_vuln = total_vulns > 0
         security_score, risk_level = calculate_security_score(verified_findings)
 
+        engine_desc = "RAG Static Rule Engine" if normalized_mode == "rag" else f"AI Verifier ({getattr(self.reasoner, 'model', 'Qwen2.5-Coder')})"
         if not is_vuln:
-            summary = f"Security analysis completed for '{contract_name or 'Contract'}'. Security Score: {security_score}/100 ({risk_level}). No security vulnerabilities were identified."
+            if suppressed_findings:
+                summary = f"Security analysis completed for '{contract_name or 'Contract'}'. Security Score: {security_score}/100 ({risk_level}). AST flagged {raw_count} candidate(s), and {engine_desc} safely rejected all {len(suppressed_findings)} as false positive(s)."
+            else:
+                summary = f"Security analysis completed for '{contract_name or 'Contract'}'. Security Score: {security_score}/100 ({risk_level}). No security vulnerabilities were identified."
         else:
             crit = severity_counts.get("Critical", 0)
             high = severity_counts.get("High", 0)
             med = severity_counts.get("Medium", 0)
             low = severity_counts.get("Low", 0)
-            summary = f"Security analysis identified {total_vulns} findings ({crit} Critical, {high} High, {med} Medium, {low} Low). Security Score: {security_score}/100 ({risk_level})."
+            suppressed_text = f" ({len(suppressed_findings)} false positive(s) filtered by AI)" if suppressed_findings else ""
+            summary = f"Security analysis identified {total_vulns} findings ({crit} Critical, {high} High, {med} Medium, {low} Low){suppressed_text}. Security Score: {security_score}/100 ({risk_level})."
 
         # Compute deterministic hashes for findings and full report
         for verified in verified_findings:
@@ -259,6 +274,8 @@ class SecurityPipeline:
             model_used = "RAG Only (No AI)"
         else:
             model_used = getattr(self.reasoner, "model", "Qwen2.5-Coder")
+
+        ai_confirmed = len([f for f in verified_findings if not f.fallback_used and f.verification_status == "CONFIRMED"])
 
         return VulnerabilityReportPayload(
             analysis_id=analysis_id,
@@ -284,6 +301,10 @@ class SecurityPipeline:
             rag_version=get_knowledge_base_version(),
             compiler_version=compiler_version,
             git_commit=get_git_commit(),
-            user_id=user_id
+            user_id=user_id,
+            raw_findings_count=raw_count,
+            ai_confirmed_count=ai_confirmed,
+            ai_rejected_count=len(suppressed_findings),
+            suppressed_findings=suppressed_findings
         )
 

@@ -23,10 +23,17 @@ export interface VerifiedVulnerability {
   attackScenario: string;
   recommendation: string;
   fallback_used: boolean;
+  fallback_reason?: string;
+  verification_status?: 'CONFIRMED' | 'REJECTED' | 'UNVERIFIED';
+  verifier_source?: string;
+  model_used?: string;
   swcId: string;
   cweId: string;
   codeSnippet: string;
   fixed_code?: string;
+  static_confidence?: number;
+  rag_similarity_score?: number;
+  rag_explanation?: string;
 }
 
 export interface VulnerabilityReport {
@@ -37,8 +44,18 @@ export interface VulnerabilityReport {
   is_vulnerable: boolean;
   severity_counts: Record<string, number>;
   findings: VerifiedVulnerability[];
+  suppressed_findings?: VerifiedVulnerability[];
+  raw_findings_count?: number;
+  ai_confirmed_count?: number;
+  ai_rejected_count?: number;
   summary: string;
   mode?: string;
+  analysis_mode?: string;
+  model_used?: string;
+  security_score?: number;
+  risk_level?: string;
+  source_hash?: string;
+  report_hash?: string;
 }
 
 export interface AnalysisHistoryItem {

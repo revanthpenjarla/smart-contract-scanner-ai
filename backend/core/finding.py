@@ -123,6 +123,7 @@ class VerifiedVulnerability(BaseModel):
     rag_similarity_score: Optional[float] = Field(None)
     rag_explanation: Optional[str] = Field(None)
     finding_hash: Optional[str] = Field(None, description="Deterministic cryptographic hash of the finding")
+    verifier_source: Optional[str] = Field(None, description="Verification engine: AI, Static AST, or Fallback")
 
     def model_post_init(self, __context: Any) -> None:
         if not self.vulnerability:
@@ -171,3 +172,7 @@ class VulnerabilityReportPayload(BaseModel):
     registry_address: Optional[str] = Field(None, description="Audit registry contract address")
     chain_id: Optional[int] = Field(None, description="EVM chain ID")
     on_chain_status: Optional[str] = Field(None, description="Status on blockchain")
+    raw_findings_count: int = 0
+    ai_confirmed_count: int = 0
+    ai_rejected_count: int = 0
+    suppressed_findings: List[VerifiedVulnerability] = Field(default_factory=list)

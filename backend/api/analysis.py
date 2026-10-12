@@ -91,7 +91,7 @@ async def process_analysis_background(analysis_id: str, source_code: str, contra
                     total_findings=report_payload.total_findings,
                     is_vulnerable=report_payload.is_vulnerable,
                     severity_counts=report_payload.severity_counts,
-                    raw_findings=[],
+                    raw_findings=[f.model_dump() if hasattr(f, "model_dump") else f for f in report_payload.findings],
                     verified_findings=[f.model_dump() for f in report_payload.findings],
                     source_hash=report_payload.source_hash,
                     report_hash=report_payload.report_hash,
@@ -107,6 +107,10 @@ async def process_analysis_background(analysis_id: str, source_code: str, contra
                         "rag_version": report_payload.rag_version,
                         "analysis_timestamp": report_payload.analysis_timestamp,
                         "user_id": analysis.user_id,
+                        "raw_findings_count": report_payload.raw_findings_count,
+                        "ai_confirmed_count": report_payload.ai_confirmed_count,
+                        "ai_rejected_count": report_payload.ai_rejected_count,
+                        "suppressed_findings": [f.model_dump() for f in report_payload.suppressed_findings],
                     }
                 )
                 db.add(report)
@@ -338,7 +342,11 @@ async def get_analysis_by_id(
         rag_version=trust_meta.get("rag_version"),
         compiler_version=rep.compiler_version,
         git_commit=rep.git_commit,
-        user_id=analysis.user_id
+        user_id=analysis.user_id,
+        raw_findings_count=trust_meta.get("raw_findings_count", len(rep.raw_findings or findings_list)),
+        ai_confirmed_count=trust_meta.get("ai_confirmed_count", len([f for f in findings_list if not getattr(f, "fallback_used", False) and getattr(f, "verification_status", "") == "CONFIRMED"])),
+        ai_rejected_count=trust_meta.get("ai_rejected_count", len(trust_meta.get("suppressed_findings", []))),
+        suppressed_findings=[VerifiedVulnerability(**sf) if isinstance(sf, dict) else sf for sf in trust_meta.get("suppressed_findings", [])]
     )
 
 
