@@ -39,7 +39,7 @@
     "id": "SWC-116",
     "name": "Block Values as a Proxy for Time / Timestamp Dependence",
     "category": "timestamp-dependence",
-    "severity": "Low",
+    "severity": "Medium",
     "cwe": "CWE-337",
     "description": "Using block.timestamp (or now) in conditionals or for pseudo-random number generation introduces vulnerabilities because miners/validators have leeway (up to ~15-30 seconds) to manipulate block timestamps to their advantage.",
     "exploit_pattern": "Lottery winner calculated via uint(keccak256(abi.encodePacked(block.timestamp, msg.sender))) % 10 == 0. Miner produces blocks only when timestamp yields a winning ticket.",
@@ -75,7 +75,7 @@
     "id": "SWC-109",
     "name": "Uninitialized Storage Pointer",
     "category": "uninitialized-storage",
-    "severity": "High",
+    "severity": "Medium",
     "cwe": "CWE-824",
     "description": "In Solidity < 0.5.0, uninitialized local struct or array variables default to pointing to contract storage slot 0, allowing writes to overwrite critical variables like owner.",
     "exploit_pattern": "User struct local pointer created without memory keyword; assigning user.id = 1 overwrites owner at slot 0.",
@@ -84,7 +84,7 @@
     "example_fixed": "function register() public {\n    User memory user;\n    user.addr = msg.sender;\n}"
   },
   {
-    "id": "SWC-000",
+    "id": "SWC-136",
     "name": "Missing Zero Address Validation",
     "category": "missing-zero-check",
     "severity": "Low",
@@ -94,5 +94,53 @@
     "mitigation": "Add require(newAddress != address(0), 'Zero address not allowed') before state assignment.",
     "example_vulnerable": "function setFeeRecipient(address _recipient) public onlyOwner {\n    feeRecipient = _recipient;\n}",
     "example_fixed": "function setFeeRecipient(address _recipient) public onlyOwner {\n    require(_recipient != address(0), 'Zero address prohibited');\n    feeRecipient = _recipient;\n}"
+  },
+  {
+    "id": "SWC-105",
+    "name": "Unprotected Critical Function / Missing Access Control",
+    "category": "missing-access-control",
+    "severity": "High",
+    "cwe": "CWE-284",
+    "description": "Critical administrative functions (e.g. setting fees, changing ownership, withdrawing funds) that lack access control checks can be called by any arbitrary account, leading to system hijacking or unauthorized parameter alteration.",
+    "exploit_pattern": "Attacker calls setFee(0) or setOwner(attacker) directly because the function is public and has no onlyOwner modifier or authorization check.",
+    "mitigation": "1. Implement access control modifiers like OpenZeppelin Ownable/AccessControl (onlyOwner).\n2. Add require(msg.sender == owner, 'Not authorized'); to sensitive functions.",
+    "example_vulnerable": "function setFee(uint256 newFee) external {\n    fee = newFee;\n}",
+    "example_fixed": "function setFee(uint256 newFee) external onlyOwner {\n    fee = newFee;\n}"
+  },
+  {
+    "id": "SWC-103",
+    "name": "Floating Pragma",
+    "category": "floating-pragma",
+    "severity": "Low",
+    "cwe": "CWE-664",
+    "description": "Contracts should be deployed with the same compiler version and flags that they have been tested with. Locking the pragma helps to ensure that contracts do not accidentally get deployed using, for example, an outdated compiler version that might introduce bugs that affect the contract system negatively.",
+    "exploit_pattern": "Using a floating pragma like ^0.8.0 or >=0.8.0 <0.9.0 allows the contract to be compiled with versions that may contain undiscovered compiler bugs.",
+    "mitigation": "Lock the pragma to a specific compiler version, e.g., pragma solidity 0.8.20;",
+    "example_vulnerable": "pragma solidity ^0.8.0;\npragma solidity >=0.8.0 <0.9.0;",
+    "example_fixed": "pragma solidity 0.8.20;"
+  },
+  {
+    "id": "SWC-117",
+    "name": "Signature Malleability / Ecrecover Validation",
+    "category": "ecrecover-validation",
+    "severity": "High",
+    "cwe": "CWE-347",
+    "description": "The ecrecover function returns an address recovered from the signature. If the signature is malformed or invalid, ecrecover returns the zero address (address(0)) instead of throwing an error. Failing to check for the zero address can allow attackers to bypass signature validation by providing an invalid signature when the expected signer is set to zero.",
+    "exploit_pattern": "Attacker provides an invalid signature. ecrecover returns address(0). If the contract does not explicitly check for address(0), and maps the zero address to a valid state, the check passes.",
+    "mitigation": "Always require that the result of ecrecover is not address(0), or use OpenZeppelin's ECDSA library.",
+    "example_vulnerable": "address signer = ecrecover(hash, v, r, s);\nrequire(signer == expectedSigner);",
+    "example_fixed": "address signer = ecrecover(hash, v, r, s);\nrequire(signer != address(0), 'Invalid signature');\nrequire(signer == expectedSigner);"
+  },
+  {
+    "id": "SWC-101",
+    "name": "Integer Overflow and Underflow",
+    "category": "integer-overflow",
+    "severity": "High",
+    "cwe": "CWE-190",
+    "description": "An integer overflow or underflow occurs when an arithmetic operation reaches the maximum or minimum size of the type. In Solidity < 0.8.0, this wraps around. In Solidity >= 0.8.0, arithmetic is checked by default and reverts on overflow, unless placed inside an unchecked { ... } block.",
+    "exploit_pattern": "Attacker triggers an underflow (e.g., 0 - 1 = 2^256 - 1) to bypass balance checks or mint infinite tokens in Solidity < 0.8.0 or inside unchecked blocks.",
+    "mitigation": "Use Solidity 0.8.0 or higher. For older versions, use SafeMath. Do not use unchecked blocks for balances or untrusted input.",
+    "example_vulnerable": "unchecked { balances[msg.sender] -= amount; }\n// Or in Solidity 0.7:\nbalances[msg.sender] -= amount;",
+    "example_fixed": "// In Solidity 0.8:\nbalances[msg.sender] -= amount;\n// Or using SafeMath in 0.7:\nbalances[msg.sender] = balances[msg.sender].sub(amount);"
   }
 ]

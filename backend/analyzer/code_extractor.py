@@ -54,6 +54,9 @@ class CodeContextExtractor:
             if re.search(r'\.(call|transfer|send|delegatecall)\b', clean):
                 external_calls.append(clean)
 
+        func_lines = lines[func_start_line - 1 : func_end_line]
+        candidate_slices = self.extract_candidate_slices(func_lines)
+
         surrounding_start = max(1, func_start_line - 5)
         surrounding_end = min(total_lines, func_end_line + 5)
         surrounding_code = chr(10).join(lines[surrounding_start - 1 : surrounding_end])
@@ -67,8 +70,42 @@ class CodeContextExtractor:
             modifiers=modifiers,
             state_variables=state_variables,
             external_calls=external_calls,
+            candidate_slices=candidate_slices,
             surrounding_code=surrounding_code
         )
+
+    def is_normal_balance_deduction(self, line: str) -> bool:
+        """
+        Determines if an expression is an ordinary caller balance deduction (e.g. balances[msg.sender] -= amount),
+        which is normal accounting and should be filtered from inverted-gatekeeping candidate slices.
+        """
+        clean = re.sub(r'//.*$', '', line).strip()
+        if re.search(r'\b[a-zA-Z0-9_]*balances?\[\s*msg\.sender\s*\]\s*-=', clean):
+            return True
+        if re.search(r'\b[a-zA-Z0-9_]*balances?\[\s*msg\.sender\s*\]\s*=\s*[a-zA-Z0-9_]*balances?\[\s*msg\.sender\s*\]\s*-\s*', clean):
+            return True
+        return False
+
+    def filter_inverted_gatekeeping_slices(self, candidate_slices: List[str]) -> List[str]:
+        """
+        Filters out clearly irrelevant normal balance deductions from candidate slices for inverted-gatekeeping
+        analysis, while preserving genuinely suspicious state modifications.
+        """
+        return [s for s in candidate_slices if not self.is_normal_balance_deduction(s)]
+
+    def extract_candidate_slices(self, func_lines: List[str]) -> List[str]:
+        """
+        Extracts candidate state-modifying slices from the function, applying inverted-gatekeeping
+        filtering to exclude standard caller balance deductions.
+        """
+        raw_slices = []
+        for line in func_lines:
+            clean = re.sub(r'//.*$', '', line).strip()
+            if not clean or clean.startswith('//') or clean.startswith('require') or clean.startswith('if') or clean.startswith('emit') or clean.startswith('assert'):
+                continue
+            if re.search(r'\b[a-zA-Z0-9_\[\]\.]+\s*(=|\+=|-=|\*=|/=|\+\+|--)', clean):
+                raw_slices.append(clean)
+        return self.filter_inverted_gatekeeping_slices(raw_slices)
 
     def _extract_state_variables(self, lines: List[str], before_line_idx: int) -> List[str]:
         state_vars = []
@@ -98,70 +135,3 @@ class CodeContextExtractor:
                     if found_first and brace_count == 0:
                         return idx + 1
         return len(lines)
-
-    def extract_candidates(self, source_code: str) -> List[Dict[str, Any]]:
-        """Extract function slices that perform state updates, external calls, or are payable"""
-        candidates = []
-        lines = source_code.splitlines()
-        
-        in_contract = False
-        contract_name = "Unknown"
-        
-        for i in range(len(lines)):
-            line = lines[i]
-            
-            # Detect contract
-            c_match = re.search(r'\bcontract\s+([a-zA-Z0-9_]+)', line)
-            if c_match:
-                contract_name = c_match.group(1)
-                in_contract = True
-            
-            # Detect function
-            if in_contract and re.search(r'\b(?:function\s+([a-zA-Z0-9_]*)|function\s*\(|constructor\s*\(|fallback\s*\(|receive\s*\()', line):
-                f_name = "fallback"
-                f_match = re.search(r'\b(?:function\s+([a-zA-Z0-9_]*)|function\s*\(|constructor\s*\(|fallback\s*\(|receive\s*\()', line)
-                if f_match:
-                    if f_match.group(1):
-                        f_name = f_match.group(1)
-                    elif 'constructor' in line:
-                        f_name = 'constructor'
-                    elif 'receive' in line:
-                        f_name = 'receive'
-                
-                start_line = i + 1
-                end_line = self._find_closing_brace(lines, i)
-                func_lines = lines[i:end_line]
-                
-                is_candidate = False
-                header = line
-                
-                # Condition 1: Payable
-                if 'payable' in header:
-                    is_candidate = True
-                
-                if not is_candidate:
-                    for f_line in func_lines:
-                        clean = re.sub(r'//.*$', '', f_line).strip()
-                        # Condition 2: External call
-                        if re.search(r'\.(call|transfer|send|delegatecall)\b', clean):
-                            is_candidate = True
-                            break
-                        # Condition 3: State modification
-                        if re.search(r'^(?!require|uint|int|address|bool|string|bytes)[a-zA-Z0-9_\[\]\.]+\s*(=|\+=|-=|\*=|/=)', clean):
-                            if 'msg.value' not in clean: # Ignore msg.value additions typical of payable functions
-                                is_candidate = True
-                                break
-                
-                if is_candidate:
-                    source_slice = chr(10).join(func_lines)
-                    candidates.append({
-                        "contract": contract_name,
-                        "function_name": f_name,
-                        "header": header,
-                        "source": source_slice,
-                        "line_start": start_line,
-                        "line_end": end_line,
-                        "state": chr(10).join(self._extract_state_variables(lines, start_line))
-                    })
-        
-        return candidates

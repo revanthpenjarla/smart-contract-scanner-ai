@@ -1,7 +1,7 @@
 # Stage 1: Build React App with Bun
 FROM oven/bun:alpine AS builder
 WORKDIR /app
-COPY frontend/package.json ./
+COPY frontend/package*.json ./
 RUN bun install
 COPY frontend/ ./
 RUN bun run build

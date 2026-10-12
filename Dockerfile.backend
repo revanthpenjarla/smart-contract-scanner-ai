@@ -11,8 +11,11 @@ COPY backend/requirements.txt backend/
 # Use uv to install dependencies 10-100x faster than pip
 RUN uv pip install --system --no-cache -r backend/requirements.txt
 
-# Copy backend code
+# Copy backend code, evaluation results, and contracts
 COPY backend/ backend/
+COPY results/ results/
+COPY contracts/ contracts/
+COPY ground_truth.json ./
 
 # Set Python path so imports work correctly
 ENV PYTHONPATH=/app

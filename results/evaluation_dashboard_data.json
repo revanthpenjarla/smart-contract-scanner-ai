@@ -1,5 +1,9 @@
 {
-  "Mode A - static": {
+  "Internal Diagnostic Suite | Mode A - static": {
+    "dataset": "Internal Diagnostic Suite",
+    "mode": "A",
+    "model": "static",
+    "prompt": "P1",
     "TP": 11,
     "TN": 2,
     "FP": 3,
@@ -96,7 +100,11 @@
       "mean_conf_incorrect": 0.9133333333333334
     }
   },
-  "Mode B - qwen2.5-coder:1.5b": {
+  "Internal Diagnostic Suite | Mode B - qwen2.5-coder:1.5b (P1)": {
+    "dataset": "Internal Diagnostic Suite",
+    "mode": "B",
+    "model": "qwen2.5-coder:1.5b",
+    "prompt": "P1",
     "TP": 0,
     "TN": 2,
     "FP": 0,
@@ -148,7 +156,11 @@
       "mean_conf_incorrect": 0
     }
   },
-  "Mode C - qwen2.5-coder:1.5b": {
+  "Internal Diagnostic Suite | Mode C - qwen2.5-coder:1.5b (P1)": {
+    "dataset": "Internal Diagnostic Suite",
+    "mode": "C",
+    "model": "qwen2.5-coder:1.5b",
+    "prompt": "P1",
     "TP": 0,
     "TN": 2,
     "FP": 0,
@@ -200,7 +212,11 @@
       "mean_conf_incorrect": 0
     }
   },
-  "Mode B - qwen2.5-coder:latest": {
+  "Internal Diagnostic Suite | Mode B - qwen2.5-coder:latest (P1)": {
+    "dataset": "Internal Diagnostic Suite",
+    "mode": "B",
+    "model": "qwen2.5-coder:latest",
+    "prompt": "P1",
     "TP": 0,
     "TN": 2,
     "FP": 0,
@@ -252,7 +268,11 @@
       "mean_conf_incorrect": 0
     }
   },
-  "Mode C - qwen2.5-coder:latest": {
+  "Internal Diagnostic Suite | Mode C - qwen2.5-coder:latest (P1)": {
+    "dataset": "Internal Diagnostic Suite",
+    "mode": "C",
+    "model": "qwen2.5-coder:latest",
+    "prompt": "P1",
     "TP": 0,
     "TN": 2,
     "FP": 0,

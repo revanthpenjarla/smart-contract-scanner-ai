@@ -1,68 +1,112 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from backend.core.finding import StaticFinding, CodeContext, VerifiedVulnerability, VulnerabilityReportPayload
 from backend.analyzer.static_analyzer import SolidityStaticAnalyzer
 from backend.analyzer.code_extractor import CodeContextExtractor
 from backend.rag.knowledge_base import SecurityKnowledgeBase
 from backend.rag.retriever import RAGRetriever
 from backend.llm.reasoner import LLMReasoner
+from backend.core.integrity import (
+    hash_source_sha256,
+    hash_source_keccak256,
+    compute_finding_hash,
+    compute_findings_hash,
+    compute_findings_merkle_root,
+    compute_report_hash,
+    extract_solidity_pragma,
+    get_git_commit,
+    get_knowledge_base_version,
+    ANALYZER_VERSION
+)
 
-CATEGORY_TITLES = {
-    "reentrancy": "Reentrancy Vulnerability",
-    "missing-access-control": "Missing Access Control",
-    "tx-origin": "Authorization through tx.origin",
-    "unchecked-arithmetic": "Unchecked Arithmetic",
-    "unprotected-selfdestruct": "Unprotected Selfdestruct",
-    "unbounded-loop": "Unbounded Loop",
-    "unchecked-call": "Unchecked Low-Level Call",
-    "dangerous-delegatecall": "Dangerous Delegatecall",
-    "timestamp-dependence": "Timestamp Dependence",
-    "missing-zero-check": "Missing Zero Address Check",
-    "uninitialized-storage": "Uninitialized Storage Pointer",
-}
+def calculate_security_score(findings: List[VerifiedVulnerability]) -> Tuple[int, str]:
+    score = 100.0
+    deduction_weights = {
+        "Critical": 25.0,
+        "High": 15.0,
+        "Medium": 8.0,
+        "Low": 3.0,
+        "Informational": 1.0,
+    }
 
-CATEGORY_SEVERITY = {
-    "missing-access-control": "Critical",
-    "reentrancy": "High",
-    "tx-origin": "High",
-    "unprotected-selfdestruct": "Critical",
-    "unchecked-arithmetic": "Medium",
-    "unbounded-loop": "Medium",
-    "unchecked-call": "Medium",
-    "dangerous-delegatecall": "Critical",
-    "timestamp-dependence": "Medium",
-    "missing-zero-check": "Low",
-    "uninitialized-storage": "Medium",
-}
+    # Strict maximum penalty that can be incurred per severity tier
+    deduction_caps = {
+        "Critical": 100.0,
+        "High": 100.0,
+        "Medium": 30.0,
+        "Low": 20.0,
+        "Informational": 10.0,
+    }
 
-CATEGORY_SWC = {
-    "missing-access-control": "SWC-105",  # Loose mapping for Unprotected Ether Withdrawal
-    "reentrancy": "SWC-107",
-    "tx-origin": "SWC-115",
-    "unprotected-selfdestruct": "SWC-106",
-    "unchecked-arithmetic": "SWC-101",
-    "unbounded-loop": "SWC-128", # DoS With Block Gas Limit
-    "unchecked-call": "SWC-104",
-    "dangerous-delegatecall": "SWC-112",
-    "timestamp-dependence": "SWC-116",
-    "missing-zero-check": "N/A",
-    "uninitialized-storage": "SWC-109"
-}
+    tier_deductions = {
+        "Critical": 0.0,
+        "High": 0.0,
+        "Medium": 0.0,
+        "Low": 0.0,
+        "Informational": 0.0,
+    }
 
-CATEGORY_CWE = {
-    "missing-access-control": "CWE-285",
-    "reentrancy": "CWE-841", # As requested in example
-    "tx-origin": "CWE-362",
-    "unprotected-selfdestruct": "CWE-284",
-    "unchecked-arithmetic": "CWE-190",
-    "unbounded-loop": "CWE-400",
-    "unchecked-call": "CWE-252",
-    "dangerous-delegatecall": "CWE-829",
-    "timestamp-dependence": "CWE-829",
-    "missing-zero-check": "N/A",
-    "uninitialized-storage": "CWE-456"
-}
+    max_severity_weight = 0
+    highest_severity = "Informational"
+
+    for f in findings:
+        conf = f.confidence if f.confidence is not None else 0.8
+        
+        # Safely handle NaN or invalid types
+        if not isinstance(conf, (int, float)) or conf != conf:
+            conf = 0.8
+        conf = max(0.0, min(1.0, float(conf)))
+        
+        weight = deduction_weights.get(f.severity, 8.0)
+        
+        if f.verification_status in ["CONFIRMED", "UNVERIFIED"]:
+            if f.severity in tier_deductions:
+                tier_deductions[f.severity] += weight * conf
+            
+            if weight > max_severity_weight:
+                max_severity_weight = weight
+                highest_severity = str(f.severity).title()
+
+    # Apply the caps and deduct from base score
+    for sev, total_deduction in tier_deductions.items():
+        cap = deduction_caps.get(sev, 100.0)
+        score -= min(total_deduction, cap)
+
+    final_score = max(0, min(100, int(round(score))))
+    
+    if final_score >= 90:
+        base_risk = "Low Risk"
+    elif final_score >= 70:
+        base_risk = "Moderate Risk"
+    elif final_score >= 40:
+        base_risk = "High Risk"
+    else:
+        base_risk = "Critical Risk"
+
+    risk_hierarchy = {
+        "Critical Risk": 4,
+        "High Risk": 3,
+        "Moderate Risk": 2,
+        "Low Risk": 1
+    }
+    
+    severity_floor = {
+        "Critical": "Critical Risk",
+        "High": "High Risk",
+        "Medium": "Moderate Risk",
+        "Low": "Low Risk",
+        "Informational": "Low Risk"
+    }
+
+    floor_risk = severity_floor.get(highest_severity, "Low Risk")
+    
+    if risk_hierarchy.get(floor_risk, 1) > risk_hierarchy.get(base_risk, 1):
+        risk_level = floor_risk
+    else:
+        risk_level = base_risk
+
+    return final_score, risk_level
 
 class SecurityPipeline:
     def __init__(
@@ -79,131 +123,142 @@ class SecurityPipeline:
         self.retriever = retriever or RAGRetriever(self.kb)
         self.reasoner = reasoner or LLMReasoner()
 
-    async def scan(self, source_code: str, contract_name: Optional[str] = None, mode: str = "C") -> VulnerabilityReportPayload:
-        # mode A: static only
-        # mode B: static + LLM
-        # mode C: static + RAG + LLM
+    async def scan(
+        self,
+        source_code: str,
+        contract_name: Optional[str] = None,
+        mode: str = "hybrid",
+        user_id: Optional[str] = None
+    ) -> VulnerabilityReportPayload:
         analysis_id = f"analysis-{uuid.uuid4().hex[:12]}"
         timestamp = datetime.now(timezone.utc).isoformat()
+
+        # Compute source integrity hashes and extract compiler pragma
+        source_hash = hash_source_sha256(source_code)
+        source_keccak256 = hash_source_keccak256(source_code)
+        compiler_version = extract_solidity_pragma(source_code)
+
+        # Normalize mode: canonical modes are 'rag', 'ai', 'hybrid'
+        # Legacy aliases: A -> rag, B -> ai, C -> hybrid
+        mode_str = (mode or "hybrid").strip().lower()
+        mode_mapping = {
+            "a": "rag",
+            "b": "ai",
+            "c": "hybrid",
+            "rag": "rag",
+            "ai": "ai",
+            "hybrid": "hybrid"
+        }
+        normalized_mode = mode_mapping.get(mode_str, "hybrid")
         
         raw_findings = self.analyzer.analyze(source_code, contract_name)
         verified_findings: List[VerifiedVulnerability] = []
         severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Informational": 0}
 
-        for finding in raw_findings:
-            if mode == "A":
-                # Static only - bypass LLM completely, just convert to VerifiedVulnerability
-                swc = CATEGORY_SWC.get(finding.category, "")
-                cwe = CATEGORY_CWE.get(finding.category, "")
-                title = CATEGORY_TITLES.get(finding.category, finding.category.replace("-", " ").title())
+        if normalized_mode == "rag":
+            for finding in raw_findings:
+                context = self.extractor.extract(source_code, finding)
+                knowledge = self.retriever.retrieve(finding, context, top_k=2)
+                
+                if knowledge:
+                    explanation = f"**RAG Context**: {knowledge[0].get('description', '')}"
+                    recommendation = knowledge[0].get('mitigation', '')
+                    scenario = knowledge[0].get('exploit_pattern', '')
+                    rag_score, rag_explain = self.retriever.get_explainability_summary(knowledge)
+                else:
+                    explanation = f"Static analyzer detection: {finding.message}"
+                    recommendation = f"Review and refactor function '{finding.function}' to address {finding.category}."
+                    scenario = "Rule-based heuristic pattern flagged in static AST/regex analysis."
+                    rag_score, rag_explain = None, None
+
+                sev = finding.severity or "High"
+                calibrated_conf = round(min(0.90, max(0.60, finding.confidence)), 2)
+                v_status = "CONFIRMED" if (isinstance(mode, str) and mode.strip().upper() == "A") else "UNVERIFIED"
                 verified = VerifiedVulnerability(
                     finding_id=finding.id,
                     is_vulnerable=True,
-                    type=finding.category,
-                    swcId=swc,
-                    cweId=cwe,
-                    title=title,
-                    severity=CATEGORY_SEVERITY.get(finding.category, "High"),
-                    confidence=finding.confidence,
+                    verification_status=v_status,
+                    vulnerability=finding.category,
+                    severity=sev,
+                    confidence=calibrated_conf,
+                    static_confidence=finding.confidence,
+                    affected_lines=list(range(finding.line_start, finding.line_end + 1)),
+                    evidence=[{"function": finding.function, "lines": list(range(finding.line_start, finding.line_end + 1))}],
+                    explanation=explanation,
+                    attack_scenario=scenario,
+                    recommendation=recommendation,
+                    original_code=finding.snippet,
+                    fixed_code="Manual fix required (AI not used)",
+                    fallback_used=False,
+                    model_used="RAG Only (No AI)",
+                    contract=finding.contract,
                     function=finding.function,
-                    line=finding.line_start,
-                    description=f"Static AST detector identified pattern: {finding.message}",
-                    attackScenario=f"Static rule flagged {finding.category} at line {finding.line_start} in function '{finding.function}'. Review callers and state modifications for exploitability.",
-                    recommendation=f"Review function '{finding.function}' and apply standard {finding.category} security patterns ({swc or 'EVM guidelines'}).",
-                    codeSnippet=finding.snippet,
-                    fixed_code=f"// Review and refactor line {finding.line_start}:\n{finding.snippet}" if finding.snippet else "",
-                    fallback_used=False
+                    swc_id=finding.swc_id,
+                    static_evidence=finding.snippet,
+                    retrieved_knowledge=knowledge,
+                    rag_similarity_score=rag_score,
+                    rag_explanation=rag_explain
                 )
-            else:
+                verified_findings.append(verified)
+        else:
+            async def verify_single_finding(finding):
                 context = self.extractor.extract(source_code, finding)
                 knowledge = None
-                if mode == "C":
+                if normalized_mode == "hybrid":
                     knowledge = self.retriever.retrieve(finding, context, top_k=2)
-                
-                if isinstance(knowledge, list):
-                    kb_text = "\n".join([
-                        f"- {entry.get('title', '')}: {entry.get('description', '')}"
-                        for entry in knowledge
-                    ])
-                else:
-                    kb_text = knowledge
-
-                verified = await self.reasoner.verify_finding(finding, context, kb_text)
+                return await self.reasoner.verify_finding(finding, context, knowledge)
             
-            verified.title = CATEGORY_TITLES.get(verified.type, verified.type)
-            verified.severity = CATEGORY_SEVERITY.get(verified.type, verified.severity)
-            verified.staticEvidence = finding.message
-            verified.codeSnippet = finding.snippet
-            verified.swcId = CATEGORY_SWC.get(verified.type, "")
-            verified.cweId = CATEGORY_CWE.get(verified.type, "")
-
-            if verified.is_vulnerable:
-                verified_findings.append(verified)
-                sev = verified.severity
-                if sev in severity_counts:
-                    severity_counts[sev] += 1
-                else:
-                    severity_counts["Medium"] += 1
-
-        total_vulns = len(verified_findings)
-        
-        # Inverted Gatekeeping & Semantic Fallback
-        if total_vulns == 0 and mode != "A":
-            # Extract candidate slices: functions that update state, make external calls, or are payable
-            candidate_slices = self.extractor.extract_candidates(source_code)
+            results = []
+            for f in raw_findings:
+                result = await verify_single_finding(f)
+                results.append(result)
             
-            for candidate in candidate_slices:
-                # Mock a static finding to pipe it to the LLM reasoner for semantic audit
-                mock_finding = StaticFinding(
-                    id=f'finding-{uuid.uuid4().hex[:8]}',
-                    contract=candidate.get("contract", contract_name or "Contract"),
-                    function=candidate.get("function_name", "unknown"),
-                    line_start=candidate.get("line_start", 0),
-                    line_end=candidate.get("line_end", 0),
-                    category='semantic-audit', # Triggers general semantic review
-                    confidence=0.5,
-                    message='Candidate function selected for semantic audit.',
-                    snippet=candidate.get("header", "")
-                )
-                
-                state_vars = [s.strip() for s in candidate.get("state", "").split("\n") if s.strip()]
-                context = CodeContext(
-                    contract_name=candidate.get("contract", contract_name or "Contract"),
-                    function_name=candidate.get("function_name", "unknown"),
-                    function_source=candidate.get("source", ""),
-                    line_start=candidate.get("line_start", 1),
-                    line_end=candidate.get("line_end", 1),
-                    state_variables=state_vars
-                )
-                
-                verified = await self.reasoner.verify_finding(mock_finding, context, kb_context="Perform a deep semantic audit for complex logic vulnerabilities (e.g., reentrancy, denial of service, improper authorization) beyond simple regex matches.")
-                
-                if verified.is_vulnerable:
-                    verified.title = CATEGORY_TITLES.get(verified.type, verified.type)
-                    verified.severity = CATEGORY_SEVERITY.get(verified.type, verified.severity)
-                    verified.staticEvidence = mock_finding.message
-                    verified.codeSnippet = verified.codeSnippet or mock_finding.snippet
-                    verified.swcId = CATEGORY_SWC.get(verified.type, "")
-                    verified.cweId = CATEGORY_CWE.get(verified.type, "")
-                    
+            for verified in results:
+                if verified.is_vulnerable or verified.verification_status in ["CONFIRMED", "UNVERIFIED"]:
+                    if normalized_mode == "ai":
+                         verified.retrieved_knowledge = []
+                         verified.rag_similarity_score = None
+                         verified.rag_explanation = None
                     verified_findings.append(verified)
-                    sev = verified.severity
-                    if sev in severity_counts:
-                        severity_counts[sev] += 1
-                    else:
-                        severity_counts["Medium"] += 1
-        
-        # Re-evaluate total vulns after semantic fallback
+
+        for verified in verified_findings:
+            sev = str(verified.severity).title()
+            if sev not in severity_counts:
+                sev = "Medium"
+            verified.severity = sev
+            severity_counts[sev] += 1
+
         total_vulns = len(verified_findings)
         is_vuln = total_vulns > 0
+        security_score, risk_level = calculate_security_score(verified_findings)
+
         if not is_vuln:
-            summary = f"Security analysis completed for '{contract_name or 'Contract'}'. No critical or high-risk vulnerabilities were identified."
+            summary = f"Security analysis completed for '{contract_name or 'Contract'}'. Security Score: {security_score}/100 ({risk_level}). No security vulnerabilities were identified."
         else:
             crit = severity_counts.get("Critical", 0)
             high = severity_counts.get("High", 0)
             med = severity_counts.get("Medium", 0)
             low = severity_counts.get("Low", 0)
-            summary = f"Security analysis identified {total_vulns} potential vulnerabilities ({crit} Critical, {high} High, {med} Medium, {low} Low) requiring attention."
+            summary = f"Security analysis identified {total_vulns} findings ({crit} Critical, {high} High, {med} Medium, {low} Low). Security Score: {security_score}/100 ({risk_level})."
+
+        # Compute deterministic hashes for findings and full report
+        for verified in verified_findings:
+            verified.finding_hash = compute_finding_hash(verified)
+
+        findings_hash = compute_findings_hash(verified_findings)
+        findings_merkle_root = compute_findings_merkle_root(verified_findings)
+        report_hash = compute_report_hash(
+            source_hash=source_hash,
+            findings_hash=findings_hash,
+            security_score=security_score,
+            risk_level=risk_level,
+            analysis_mode=normalized_mode
+        )
+
+        if normalized_mode == "rag":
+            model_used = "RAG Only (No AI)"
+        else:
+            model_used = getattr(self.reasoner, "model", "Qwen2.5-Coder")
 
         return VulnerabilityReportPayload(
             analysis_id=analysis_id,
@@ -214,5 +269,21 @@ class SecurityPipeline:
             severity_counts=severity_counts,
             findings=verified_findings,
             summary=summary,
-            mode=mode
+            security_score=security_score,
+            risk_level=risk_level,
+            source_code=source_code,
+            source_hash=source_hash,
+            source_keccak256=source_keccak256,
+            report_hash=report_hash,
+            findings_hash=findings_hash,
+            findings_merkle_root=findings_merkle_root,
+            analyzer_version=ANALYZER_VERSION,
+            analysis_timestamp=timestamp,
+            model_used=model_used,
+            analysis_mode=normalized_mode,
+            rag_version=get_knowledge_base_version(),
+            compiler_version=compiler_version,
+            git_commit=get_git_commit(),
+            user_id=user_id
         )
+

@@ -120,18 +120,32 @@ export default function EvaluationDashboardPage() {
     );
   }
 
-  // Derive unique filters
-  const allDatasets = Array.from(new Set(Object.values(data).map((v) => v.dataset)));
+  // Derive unique filters with fallback extraction from keys
+  const allDatasets = Array.from(
+    new Set(
+      Object.entries(data).map(([k, v]) => v.dataset || (k.includes('|') ? k.split('|')[0].trim() : 'Internal Diagnostic Suite'))
+    )
+  );
   const allPrompts = Array.from(
-    new Set(Object.values(data).map((v) => v.prompt).filter((p): p is string => Boolean(p)))
+    new Set(
+      Object.entries(data).map(([k, v]) => v.prompt || (k.includes('P0') ? 'P0' : 'P1'))
+    )
   );
 
+  const activeDataset = allDatasets.includes(selectedDataset) ? selectedDataset : (allDatasets[0] || 'Internal Diagnostic Suite');
+  const activePrompt = allPrompts.includes(selectedPrompt) ? selectedPrompt : (allPrompts[0] || 'P1');
+
   // Filter keys based on selected dataset and prompt (Static mode is prompt-agnostic)
-  const modes = Object.keys(data).filter(
-    (key) =>
-      data[key].dataset === selectedDataset &&
-      (data[key].model === 'static' || data[key].prompt === selectedPrompt)
-  );
+  let modes = Object.keys(data).filter((key) => {
+    const ds = data[key].dataset || (key.includes('|') ? key.split('|')[0].trim() : 'Internal Diagnostic Suite');
+    const p = data[key].prompt || (key.includes('P0') ? 'P0' : 'P1');
+    const m = data[key].model || (key.includes('static') ? 'static' : '');
+    return ds === activeDataset && (m === 'static' || p === activePrompt);
+  });
+
+  if (modes.length === 0) {
+    modes = Object.keys(data);
+  }
 
   const tabs = [
     { id: 'summary', label: 'Overall Metrics' },
@@ -156,7 +170,7 @@ export default function EvaluationDashboardPage() {
               Evaluation Dataset
             </label>
             <select
-              value={selectedDataset}
+              value={activeDataset}
               onChange={(e) => setSelectedDataset(e.target.value)}
               className="bg-slate-900 border border-slate-700/80 text-slate-100 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500"
             >
@@ -176,7 +190,7 @@ export default function EvaluationDashboardPage() {
               Prompt Condition
             </label>
             <select
-              value={selectedPrompt}
+              value={activePrompt}
               onChange={(e) => setSelectedPrompt(e.target.value)}
               className="bg-slate-900 border border-slate-700/80 text-slate-100 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500"
             >
